@@ -200,7 +200,7 @@ async function handleCounting(message) {
   const isSameUser = lastUserId && lastUserId === message.author.id;
 
   if (parsed !== nextNumber || isSameUser) {
-    await setCountingState(0, null);
+    await setCountingState(0, message.author.id);
     await createCountingErrorThread(message);
     await message.channel.send({
       content: `${message.author} Erreur ! Le bon nombre était ${nextNumber}. Le compteur repart à 1.`
