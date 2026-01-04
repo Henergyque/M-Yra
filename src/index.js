@@ -123,7 +123,7 @@ async function getCountingState() {
 
   return {
     lastNumber: Number.parseInt(lastNumberRow?.value ?? '0', 10),
-    lastUserId: lastUserRow?.value || null
+    lastUserId: lastUserRow?.value ? String(lastUserRow.value) : null
   };
 }
 
@@ -197,7 +197,7 @@ async function handleCounting(message) {
   const { lastNumber, lastUserId } = await getCountingState();
   const nextNumber = lastNumber + 1;
   const parsed = parseCountingNumber(message.content);
-  const isSameUser = lastUserId && lastUserId === message.author.id;
+  const isSameUser = lastUserId === message.author.id;
 
   if (parsed !== nextNumber || isSameUser) {
     await setCountingState(0, message.author.id);
