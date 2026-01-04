@@ -218,7 +218,7 @@ async function handleCounting(message) {
     const isSameUser = lastUserId === message.author.id;
 
     if (parsed !== nextNumber || isSameUser) {
-      await setCountingState(message.channel.id, 0, message.author.id);
+      await setCountingState(message.channel.id, 0, null);
       await message.react('❌');
       await createCountingErrorThread(message);
       const errorEmbed = new EmbedBuilder()
