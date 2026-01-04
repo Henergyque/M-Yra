@@ -182,7 +182,8 @@ async function handleConfession(message) {
     .setTitle('Confession anonyme')
     .setDescription(message.content.trim())
     .setColor(0xb07bff)
-    .setFooter({ text: `Confession #${confessionId}` });
+    .setFooter({ text: `Confession #${confessionId}` })
+    .setTimestamp();
 
   await message.channel.send({ embeds: [embed] });
   await message.delete();
@@ -220,8 +221,20 @@ async function handleCounting(message) {
       await setCountingState(message.channel.id, 0, message.author.id);
       await message.react('❌');
       await createCountingErrorThread(message);
+      const errorEmbed = new EmbedBuilder()
+        .setTitle('Counting - erreur')
+        .setDescription(
+          [
+            `Le bon nombre était **${nextNumber}**.`,
+            'Le compteur repart à **1**.',
+            'À vous de décider du gage dans le thread.'
+          ].join('\n')
+        )
+        .setColor(0xff6b6b)
+        .setTimestamp();
       await message.channel.send({
-        content: `${message.author} Erreur ! Le bon nombre était ${nextNumber}. Le compteur repart à 1.`
+        content: `${message.author}`,
+        embeds: [errorEmbed]
       });
       return true;
     }
