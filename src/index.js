@@ -89,6 +89,8 @@ const client = new Client({
   partials: [Partials.Channel]
 });
 
+const countingLocks = new Map();
+
 function isConfiguredChannel(channelId, list) {
   return Array.isArray(list) && list.includes(channelId);
 }
@@ -194,22 +196,28 @@ async function handleCounting(message) {
     return false;
   }
 
-  const { lastNumber, lastUserId } = await getCountingState();
-  const nextNumber = lastNumber + 1;
-  const parsed = parseCountingNumber(message.content);
-  const isSameUser = lastUserId === message.author.id;
+  const lock = countingLocks.get(message.channel.id) ?? Promise.resolve();
+  const nextLock = lock.then(async () => {
+    const { lastNumber, lastUserId } = await getCountingState();
+    const nextNumber = lastNumber + 1;
+    const parsed = parseCountingNumber(message.content);
+    const isSameUser = lastUserId === message.author.id;
 
-  if (parsed !== nextNumber || isSameUser) {
-    await setCountingState(0, message.author.id);
-    await createCountingErrorThread(message);
-    await message.channel.send({
-      content: `${message.author} Erreur ! Le bon nombre était ${nextNumber}. Le compteur repart à 1.`
-    });
+    if (parsed !== nextNumber || isSameUser) {
+      await setCountingState(0, message.author.id);
+      await createCountingErrorThread(message);
+      await message.channel.send({
+        content: `${message.author} Erreur ! Le bon nombre était ${nextNumber}. Le compteur repart à 1.`
+      });
+      return true;
+    }
+
+    await setCountingState(parsed, message.author.id);
     return true;
-  }
+  });
 
-  await setCountingState(parsed, message.author.id);
-  return true;
+  countingLocks.set(message.channel.id, nextLock.catch(() => {}));
+  return nextLock;
 }
 
 async function handleAdminConfessionLookup(message) {
