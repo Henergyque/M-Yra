@@ -90,6 +90,7 @@ const client = new Client({
 });
 
 const countingLocks = new Map();
+const countingCache = new Map();
 
 function isConfiguredChannel(channelId, list) {
   return Array.isArray(list) && list.includes(channelId);
@@ -113,7 +114,12 @@ function parseCountingNumber(messageContent) {
   return Number.parseInt(trimmed, 10);
 }
 
-async function getCountingState() {
+async function getCountingState(channelId) {
+  const cached = countingCache.get(channelId);
+  if (cached) {
+    return cached;
+  }
+
   const lastNumberRow = await getQuery(
     'SELECT value FROM counters WHERE key = ?',
     ['counting_last']
@@ -123,13 +129,20 @@ async function getCountingState() {
     ['counting_last_user']
   );
 
-  return {
+  const state = {
     lastNumber: Number.parseInt(lastNumberRow?.value ?? '0', 10),
     lastUserId: lastUserRow?.value ? String(lastUserRow.value) : null
   };
+
+  countingCache.set(channelId, state);
+  return state;
 }
 
-async function setCountingState(lastNumber, lastUserId) {
+async function setCountingState(channelId, lastNumber, lastUserId) {
+  countingCache.set(channelId, {
+    lastNumber,
+    lastUserId: lastUserId ?? null
+  });
   await runQuery('UPDATE counters SET value = ? WHERE key = ?', [String(lastNumber), 'counting_last']);
   await runQuery('UPDATE counters SET value = ? WHERE key = ?', [lastUserId ?? '', 'counting_last_user']);
 }
@@ -198,13 +211,13 @@ async function handleCounting(message) {
 
   const lock = countingLocks.get(message.channel.id) ?? Promise.resolve();
   const nextLock = lock.then(async () => {
-    const { lastNumber, lastUserId } = await getCountingState();
+    const { lastNumber, lastUserId } = await getCountingState(message.channel.id);
     const nextNumber = lastNumber + 1;
     const parsed = parseCountingNumber(message.content);
     const isSameUser = lastUserId === message.author.id;
 
     if (parsed !== nextNumber || isSameUser) {
-      await setCountingState(0, message.author.id);
+      await setCountingState(message.channel.id, 0, message.author.id);
       await createCountingErrorThread(message);
       await message.channel.send({
         content: `${message.author} Erreur ! Le bon nombre était ${nextNumber}. Le compteur repart à 1.`
@@ -212,7 +225,7 @@ async function handleCounting(message) {
       return true;
     }
 
-    await setCountingState(parsed, message.author.id);
+    await setCountingState(message.channel.id, parsed, message.author.id);
     return true;
   });
 
