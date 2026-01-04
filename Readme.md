@@ -66,3 +66,20 @@ Dans `countingChannelId`, les membres doivent écrire `1`, puis `2`, etc. Si une
 Le même membre ne peut pas jouer deux fois de suite.
 
 Le compteur est persistant dans SQLite.
+
+### Quiz
+Lancez un quiz avec la commande :
+
+```
+!quiz
+```
+
+Déroulement :
+- le bot propose 4 thèmes via un embed (jeux vidéo, musique, art, culture générale)
+- vote par réactions (égalité → aléatoire)
+- 10 questions QCM, réponses par réactions, temps limité
+- classement final avec points par joueur
+
+Contraintes :
+- une seule session active à la fois
+- réponses par réactions uniquement
