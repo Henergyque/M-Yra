@@ -218,6 +218,7 @@ async function handleCounting(message) {
 
     if (parsed !== nextNumber || isSameUser) {
       await setCountingState(message.channel.id, 0, message.author.id);
+      await message.react('❌');
       await createCountingErrorThread(message);
       await message.channel.send({
         content: `${message.author} Erreur ! Le bon nombre était ${nextNumber}. Le compteur repart à 1.`
@@ -226,6 +227,7 @@ async function handleCounting(message) {
     }
 
     await setCountingState(message.channel.id, parsed, message.author.id);
+    await message.react('✅');
     return true;
   });
 
