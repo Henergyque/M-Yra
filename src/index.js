@@ -5,6 +5,7 @@ import sqlite3 from 'sqlite3';
 import {
   ChannelType,
   Client,
+  EmbedBuilder,
   GatewayIntentBits,
   Partials,
   PermissionsBitField,
@@ -65,12 +66,16 @@ async function initializeDatabase() {
   await runQuery(`
     CREATE TABLE IF NOT EXISTS counters (
       key TEXT PRIMARY KEY,
-      value INTEGER NOT NULL
+      value TEXT NOT NULL
     )
   `);
   await runQuery(
     'INSERT OR IGNORE INTO counters (key, value) VALUES (?, ?)',
-    ['counting_last', 0]
+    ['counting_last', '0']
+  );
+  await runQuery(
+    'INSERT OR IGNORE INTO counters (key, value) VALUES (?, ?)',
+    ['counting_last_user', '']
   );
 }
 
@@ -106,13 +111,25 @@ function parseCountingNumber(messageContent) {
   return Number.parseInt(trimmed, 10);
 }
 
-async function getCountingLast() {
-  const row = await getQuery('SELECT value FROM counters WHERE key = ?', ['counting_last']);
-  return row?.value ?? 0;
+async function getCountingState() {
+  const lastNumberRow = await getQuery(
+    'SELECT value FROM counters WHERE key = ?',
+    ['counting_last']
+  );
+  const lastUserRow = await getQuery(
+    'SELECT value FROM counters WHERE key = ?',
+    ['counting_last_user']
+  );
+
+  return {
+    lastNumber: Number.parseInt(lastNumberRow?.value ?? '0', 10),
+    lastUserId: lastUserRow?.value || null
+  };
 }
 
-async function setCountingLast(value) {
-  await runQuery('UPDATE counters SET value = ? WHERE key = ?', [value, 'counting_last']);
+async function setCountingState(lastNumber, lastUserId) {
+  await runQuery('UPDATE counters SET value = ? WHERE key = ?', [String(lastNumber), 'counting_last']);
+  await runQuery('UPDATE counters SET value = ? WHERE key = ?', [lastUserId ?? '', 'counting_last_user']);
 }
 
 async function handleThreadCreation(message) {
@@ -146,10 +163,30 @@ async function handleConfession(message) {
   );
 
   const confessionId = result.lastID;
-  const confessionText = `Confession #${confessionId}\n${message.content.trim()}`;
-  await message.channel.send({ content: confessionText });
+  const embed = new EmbedBuilder()
+    .setTitle('Confession anonyme')
+    .setDescription(message.content.trim())
+    .setColor(0xb07bff)
+    .setFooter({ text: `Confession #${confessionId}` });
+
+  await message.channel.send({ embeds: [embed] });
   await message.delete();
   return true;
+}
+
+async function createCountingErrorThread(message) {
+  if (message.channel.type !== ChannelType.GuildText) {
+    return;
+  }
+
+  try {
+    await message.startThread({
+      name: 'Discussion counting',
+      autoArchiveDuration: ThreadAutoArchiveDuration.OneDay
+    });
+  } catch (error) {
+    // Ignore thread creation errors to avoid blocking counting flow.
+  }
 }
 
 async function handleCounting(message) {
@@ -157,19 +194,21 @@ async function handleCounting(message) {
     return false;
   }
 
-  const lastNumber = await getCountingLast();
+  const { lastNumber, lastUserId } = await getCountingState();
   const nextNumber = lastNumber + 1;
   const parsed = parseCountingNumber(message.content);
+  const isSameUser = lastUserId && lastUserId === message.author.id;
 
-  if (parsed !== nextNumber) {
-    await setCountingLast(0);
+  if (parsed !== nextNumber || isSameUser) {
+    await setCountingState(0, null);
+    await createCountingErrorThread(message);
     await message.channel.send({
-      content: `Erreur ! Le bon nombre était ${nextNumber}. Le compteur repart à 1.`
+      content: `${message.author} Erreur ! Le bon nombre était ${nextNumber}. Le compteur repart à 1.`
     });
     return true;
   }
 
-  await setCountingLast(parsed);
+  await setCountingState(parsed, message.author.id);
   return true;
 }
 
