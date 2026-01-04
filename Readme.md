@@ -36,6 +36,11 @@ npm start
 
 La base SQLite est créée automatiquement dans `data/bot.sqlite`.
 
+## Quiz data
+
+Le quiz est chargé depuis `data/quiz.json`. Vous pouvez copier `data/quiz.example.json`
+et adapter les thèmes/questions.
+
 ## Fonctionnalités
 
 ### Threads automatiques
