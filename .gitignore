@@ -1,3 +1,4 @@
 node_modules/
 config.json
 data/bot.sqlite
+data/quiz.example.json
