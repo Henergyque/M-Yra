@@ -100,6 +100,8 @@ const quizAnswerEmojis = ['🇦', '🇧', '🇨', '🇩'];
 const quizQuestionCount = 10;
 const quizVoteDurationMs = 20000;
 const quizQuestionDurationMs = 15000;
+const supportLink = 'https://buymeacoffee.com/henergyque';
+const supportMessage = `Si tu veux soutenir le bot, voici un petit café ☕ : ${supportLink}`;
 
 function isConfiguredChannel(channelId, list) {
   return Array.isArray(list) && list.includes(channelId);
@@ -296,6 +298,15 @@ async function handleAdminConfessionLookup(message) {
   await message.channel.send(`Confession #${confessionId} envoyée par <@${entry.author_id}>.`);
 }
 
+async function handleSupportCommand(message) {
+  if (message.content.trim() !== '!support') {
+    return false;
+  }
+
+  await message.channel.send(supportMessage);
+  return true;
+}
+
 function createQuizThemeEmbed() {
   const description = quizThemes
     .map((theme, index) => `${quizThemeEmojis[index]} **${theme.name}**`)
@@ -444,6 +455,11 @@ client.on('messageCreate', async (message) => {
     return;
   }
 
+  const handledSupport = await handleSupportCommand(message);
+  if (handledSupport) {
+    return;
+  }
+
   const handledQuiz = await handleQuizCommand(message);
   if (handledQuiz) {
     return;
@@ -473,6 +489,9 @@ client.on('messageCreate', async (message) => {
 
 client.once('ready', () => {
   console.log(`Bot connecté en tant que ${client.user.tag}`);
+  client.user.setPresence({
+    activities: [{ name: '☕ !support', type: 0 }]
+  });
 });
 
 await initializeDatabase();
