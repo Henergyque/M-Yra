@@ -1,0 +1,7 @@
+{
+  "token": "YOUR_BOT_TOKEN",
+  "threadChannelIds": ["123456789012345678"],
+  "confessionChannelId": "234567890123456789",
+  "countingChannelId": "345678901234567890",
+  "adminUserIds": ["456789012345678901"]
+}
