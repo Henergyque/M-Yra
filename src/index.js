@@ -357,13 +357,24 @@ async function handleActionVeriteCommand(message) {
     return false;
   }
 
-  const gameMessage = await message.channel.send({
+  let targetChannel = message.channel;
+  try {
+    const thread = await message.startThread({
+      name: 'Action ou Vérité',
+      autoArchiveDuration: ThreadAutoArchiveDuration.OneDay
+    });
+    targetChannel = thread;
+  } catch (error) {
+    // Ignore thread creation errors and fallback to the channel.
+  }
+
+  const gameMessage = await targetChannel.send({
     embeds: [createActionVeriteEmbed()],
     components: [createActionVeriteRow(false)]
   });
 
   actionVeriteGames.set(gameMessage.id, {
-    channelId: message.channel.id,
+    channelId: targetChannel.id,
     activeUserId: null
   });
 
