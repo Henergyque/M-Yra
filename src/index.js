@@ -3,6 +3,9 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import sqlite3 from 'sqlite3';
 import {
+  ActionRowBuilder,
+  ButtonBuilder,
+  ButtonStyle,
   ChannelType,
   Client,
   EmbedBuilder,
@@ -86,6 +89,8 @@ const client = new Client({
 const countingLocks = new Map();
 const countingCache = new Map();
 let activeQuiz = null;
+const actionVeriteGames = new Map();
+const actionVeriteLocks = new Map();
 
 const quizDataPath = path.join(__dirname, '..', 'storage', 'quiz.json');
 const quizFallbackPath = path.join(__dirname, '..', 'storage', 'quiz.example.json');
@@ -100,6 +105,7 @@ const quizAnswerEmojis = ['🇦', '🇧', '🇨', '🇩'];
 const quizQuestionCount = 10;
 const quizVoteDurationMs = 20000;
 const quizQuestionDurationMs = 15000;
+const actionVeriteCommand = '!actionverite';
 const supportLink = 'https://buymeacoffee.com/henergyque';
 const supportMessage = `Si tu veux soutenir le bot, voici un petit café ☕ : ${supportLink}`;
 
@@ -307,6 +313,63 @@ async function handleSupportCommand(message) {
   return true;
 }
 
+function createActionVeriteEmbed() {
+  return new EmbedBuilder()
+    .setTitle('Action ou Vérité')
+    .setDescription(
+      [
+        `Tapez \`${actionVeriteCommand}\` pour ouvrir le jeu.`,
+        'Cliquez sur **Action** ou **Vérité** pour jouer.',
+        'Une seule personne à la fois — utilisez **Terminé** pour libérer le verrou.'
+      ].join('\n')
+    )
+    .setColor(0xffc857)
+    .setTimestamp();
+}
+
+function createActionVeriteRow(isLocked) {
+  return new ActionRowBuilder().addComponents(
+    new ButtonBuilder()
+      .setCustomId('action-verite:action')
+      .setLabel('Action')
+      .setStyle(ButtonStyle.Danger)
+      .setDisabled(isLocked),
+    new ButtonBuilder()
+      .setCustomId('action-verite:verite')
+      .setLabel('Vérité')
+      .setStyle(ButtonStyle.Primary)
+      .setDisabled(isLocked),
+    new ButtonBuilder()
+      .setCustomId('action-verite:termine')
+      .setLabel('Terminé')
+      .setStyle(ButtonStyle.Success)
+      .setDisabled(!isLocked)
+  );
+}
+
+async function handleActionVeriteCommand(message) {
+  if (!message.guild || message.channel.type !== ChannelType.GuildText) {
+    return false;
+  }
+
+  const trimmed = message.content.trim();
+  if (trimmed !== actionVeriteCommand && trimmed !== '!av') {
+    return false;
+  }
+
+  const gameMessage = await message.channel.send({
+    embeds: [createActionVeriteEmbed()],
+    components: [createActionVeriteRow(false)]
+  });
+
+  actionVeriteGames.set(gameMessage.id, {
+    channelId: message.channel.id,
+    activeUserId: null
+  });
+
+  return true;
+}
+
 function createQuizThemeEmbed() {
   const description = quizThemes
     .map((theme, index) => `${quizThemeEmojis[index]} **${theme.name}**`)
@@ -460,6 +523,11 @@ client.on('messageCreate', async (message) => {
     return;
   }
 
+  const handledActionVerite = await handleActionVeriteCommand(message);
+  if (handledActionVerite) {
+    return;
+  }
+
   const handledQuiz = await handleQuizCommand(message);
   if (handledQuiz) {
     return;
@@ -492,6 +560,73 @@ client.once('ready', () => {
   client.user.setPresence({
     activities: [{ name: '☕ !support', type: 0 }]
   });
+});
+
+client.on('interactionCreate', async (interaction) => {
+  if (!interaction.isButton()) {
+    return;
+  }
+
+  const [namespace, action] = interaction.customId.split(':');
+  if (namespace !== 'action-verite') {
+    return;
+  }
+
+  const game = actionVeriteGames.get(interaction.message.id);
+  if (!game) {
+    await interaction.reply({
+      content: 'Cette partie est terminée ou inactive.',
+      ephemeral: true
+    });
+    return;
+  }
+
+  const lock = actionVeriteLocks.get(interaction.message.id) ?? Promise.resolve();
+  const nextLock = lock.then(async () => {
+    if (action === 'termine') {
+      if (!game.activeUserId) {
+        await interaction.reply({
+          content: 'Aucune partie en cours pour le moment.',
+          ephemeral: true
+        });
+        return;
+      }
+
+      if (interaction.user.id !== game.activeUserId) {
+        await interaction.reply({
+          content: `Seul <@${game.activeUserId}> peut terminer la partie en cours.`,
+          ephemeral: true
+        });
+        return;
+      }
+
+      game.activeUserId = null;
+      await interaction.update({
+        components: [createActionVeriteRow(false)]
+      });
+      await interaction.channel.send('La partie est terminée. Les boutons sont de nouveau disponibles.');
+      return;
+    }
+
+    if (game.activeUserId) {
+      await interaction.reply({
+        content: `Une partie est déjà en cours avec <@${game.activeUserId}>.`,
+        ephemeral: true
+      });
+      return;
+    }
+
+    game.activeUserId = interaction.user.id;
+    const choiceLabel = action === 'action' ? 'Action' : 'Vérité';
+
+    await interaction.update({
+      components: [createActionVeriteRow(true)]
+    });
+    await interaction.channel.send(`${interaction.user} a choisi **${choiceLabel}** !`);
+  });
+
+  actionVeriteLocks.set(interaction.message.id, nextLock.catch(() => {}));
+  await nextLock;
 });
 
 await initializeDatabase();
