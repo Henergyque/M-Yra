@@ -357,25 +357,15 @@ async function handleActionVeriteCommand(message) {
     return false;
   }
 
-  let targetChannel = message.channel;
-  try {
-    const thread = await message.startThread({
-      name: 'Action ou Vérité',
-      autoArchiveDuration: ThreadAutoArchiveDuration.OneDay
-    });
-    targetChannel = thread;
-  } catch (error) {
-    // Ignore thread creation errors and fallback to the channel.
-  }
-
-  const gameMessage = await targetChannel.send({
+  const gameMessage = await message.channel.send({
     embeds: [createActionVeriteEmbed()],
     components: [createActionVeriteRow(false)]
   });
 
   actionVeriteGames.set(gameMessage.id, {
-    channelId: targetChannel.id,
-    activeUserId: null
+    channelId: message.channel.id,
+    activeUserId: null,
+    threadId: null
   });
 
   return true;
@@ -612,6 +602,7 @@ client.on('interactionCreate', async (interaction) => {
       }
 
       game.activeUserId = null;
+      game.threadId = null;
       await interaction.update({
         components: [createActionVeriteRow(false)]
       });
@@ -629,11 +620,25 @@ client.on('interactionCreate', async (interaction) => {
 
     game.activeUserId = interaction.user.id;
     const choiceLabel = action === 'action' ? 'Action' : 'Vérité';
+    let threadMessage = 'Le fil de discussion est prêt.';
+
+    try {
+      const thread = await interaction.message.startThread({
+        name: `Action ou Vérité — ${interaction.user.username}`,
+        autoArchiveDuration: ThreadAutoArchiveDuration.OneDay
+      });
+      game.threadId = thread.id;
+      await thread.send(`${interaction.user} a choisi **${choiceLabel}**. À vous de jouer !`);
+      threadMessage = `Thread créé : ${thread.name}`;
+    } catch (error) {
+      // Ignore thread creation errors and fallback to channel only.
+      threadMessage = 'Impossible de créer le thread, la partie se déroule ici.';
+    }
 
     await interaction.update({
       components: [createActionVeriteRow(true)]
     });
-    await interaction.channel.send(`${interaction.user} a choisi **${choiceLabel}** !`);
+    await interaction.channel.send(`${interaction.user} a choisi **${choiceLabel}** ! ${threadMessage}`);
   });
 
   actionVeriteLocks.set(interaction.message.id, nextLock.catch(() => {}));
