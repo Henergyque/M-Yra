@@ -1,0 +1,9 @@
+{
+  "token": "YOUR_BOT_TOKEN_HERE",
+  "threadChannelIds": ["CHANNEL_ID_1", "CHANNEL_ID_2"],
+  "confessionChannelId": "CONFESSION_CHANNEL_ID",
+  "countingChannelId": "COUNTING_CHANNEL_ID",
+  "wordGameChannelId": "WORD_GAME_CHANNEL_ID",
+  "openaiApiKey": "sk-YOUR_OPENAI_API_KEY_HERE",
+  "adminUserIds": ["ADMIN_USER_ID"]
+}

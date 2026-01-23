@@ -22,7 +22,9 @@ npm install
   "threadChannelIds": ["123456789012345678"],
   "confessionChannelId": "234567890123456789",
   "countingChannelId": "345678901234567890",
-  "adminUserIds": ["456789012345678901"]
+  "wordGameChannelId": "456789012345678901",
+  "openaiApiKey": "sk-YOUR_OPENAI_API_KEY",
+  "adminUserIds": ["567890123456789012"]
 }
 ```
 
@@ -114,3 +116,55 @@ Déroulement :
 Contraintes :
 - une seule session active à la fois
 - réponses par réactions uniquement
+
+### Jeu d'Association de Mots 🎮
+Dans le salon configuré via `wordGameChannelId`, les membres jouent à un jeu d'association :
+- Chaque joueur doit poster un mot lié au mot précédent
+- Le bot valide la connexion entre les mots via **OpenAI API**
+- Système de points : 1 point par mot valide + bonus streak (1 point bonus tous les 10 mots)
+- Le streak est collectif pour tout le canal
+
+En cas d'erreur :
+- Le bot explique pourquoi le mot est rejeté
+- Le streak du canal est réinitialisé à 0
+- Un nouveau mot est généré automatiquement par OpenAI pour relancer le jeu
+- Un thread est créé pour discuter de l'erreur
+
+Commande stats :
+```
+!wordstats              # Affiche le classement du canal
+!wordstats @utilisateur # Affiche les stats personnelles
+```
+
+Statistiques suivies :
+- Points totaux par joueur
+- Meilleur streak personnel
+- Streak actuel du canal
+- Top 10 du leaderboard
+
+**Note :** Ce jeu nécessite une clé API OpenAI valide dans la configuration.
+
+### Action ou Vérité
+Lancez le jeu avec la commande :
+
+```
+!actionverite
+```
+ou
+```
+!av
+```
+
+Le bot affiche un message avec boutons interactifs :
+- **Action** : le joueur choisit Action
+- **Vérité** : le joueur choisit Vérité
+- **Terminé** : libère le verrou (seul le joueur actif peut l'utiliser)
+
+Un thread dédié est automatiquement créé pour chaque tour.
+
+### Support
+```
+!support
+```
+
+Affiche un lien de support pour le bot.
