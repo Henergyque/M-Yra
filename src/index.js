@@ -283,11 +283,18 @@ async function handleCounting(message) {
       await setCountingState(message.channel.id, 0, null);
       await message.react('❌');
       await createCountingErrorThread(message);
+      const reasons = [];
+      if (isSameUser) {
+        reasons.push('Le même joueur ne peut pas jouer deux fois de suite.');
+      }
+      if (parsed !== nextNumber) {
+        reasons.push(`Le bon nombre était **${nextNumber}**.`);
+      }
       const errorEmbed = new EmbedBuilder()
         .setTitle('Counting - erreur')
         .setDescription(
           [
-            `Le bon nombre était **${nextNumber}**.`,
+            ...reasons,
             'Le compteur repart à **1**.',
             'À vous de décider du gage dans le thread.'
           ].join('\n')
@@ -495,6 +502,22 @@ async function handleWordGame(message) {
   const lock = wordGameLocks.get(message.channel.id) ?? Promise.resolve();
   const nextLock = lock.then(async () => {
     const { currentWord, lastUserId, channelStreak } = await getWordGameState(message.channel.id);
+
+    // Prevent same user from playing twice in a row
+    if (lastUserId === message.author.id) {
+      await message.react('❌');
+      const sameUserEmbed = new EmbedBuilder()
+        .setTitle('🚫 Tour consécutif interdit')
+        .setDescription(
+          `Tu as déjà joué le mot précédent (**${currentWord}**). ` +
+          `Laisse quelqu'un d'autre répondre avant de rejouer.`
+        )
+        .setColor(0xff6b6b)
+        .setFooter({ text: `Mot actuel: ${currentWord || '—'}` });
+
+      await message.channel.send({ content: `${message.author}`, embeds: [sameUserEmbed] });
+      return true;
+    }
 
     // Initialize game with first word
     if (!currentWord) {
