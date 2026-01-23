@@ -104,6 +104,14 @@ async function initializeDatabase() {
       PRIMARY KEY (user_id, channel_id)
     )
   `);
+  await runQuery(`
+    CREATE TABLE IF NOT EXISTS word_game_history (
+      channel_id TEXT NOT NULL,
+      word TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      PRIMARY KEY (channel_id, word)
+    )
+  `);
 }
 
 const client = new Client({
@@ -467,6 +475,48 @@ async function updateWordGameScore(userId, channelId, points, currentStreak) {
   );
 }
 
+function normalizeWord(raw) {
+  if (!raw) return '';
+  let w = String(raw).toLowerCase().trim();
+  // Remove accents/diacritics
+  w = w.normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+  // Basic French plural normalization
+  if (w.endsWith('eaux')) {
+    w = w.slice(0, -1 * 'eaux'.length) + 'eau';
+  } else if (w.endsWith('aux')) {
+    w = w.slice(0, -1 * 'aux'.length) + 'al';
+  } else if (w.endsWith('oux')) {
+    w = w.slice(0, -1 * 'oux'.length) + 'ou';
+  } else if (w.length > 3 && (w.endsWith('s') || w.endsWith('x'))) {
+    w = w.slice(0, -1);
+  }
+  return w;
+}
+
+async function isWordUsed(channelId, word) {
+  const normalized = normalizeWord(word);
+  const row = await getQuery(
+    'SELECT 1 FROM word_game_history WHERE channel_id = ? AND word = ?',
+    [channelId, normalized]
+  );
+  return Boolean(row);
+}
+
+async function addWordHistory(channelId, word) {
+  const normalized = normalizeWord(word);
+  await runQuery(
+    'INSERT OR IGNORE INTO word_game_history (channel_id, word, created_at) VALUES (?, ?, ?)',
+    [channelId, normalized, new Date().toISOString()]
+  );
+}
+
+async function clearWordHistory(channelId) {
+  await runQuery(
+    'DELETE FROM word_game_history WHERE channel_id = ?',
+    [channelId]
+  );
+}
+
 async function createWordGameErrorThread(message) {
   if (message.channel.type !== ChannelType.GuildText) {
     return;
@@ -519,9 +569,28 @@ async function handleWordGame(message) {
       return true;
     }
 
+    // Reject reusing an already played word (channel history)
+    if (await isWordUsed(message.channel.id, userWord)) {
+      await message.react('❌');
+      const duplicateEmbed = new EmbedBuilder()
+        .setTitle('🔁 Mot déjà utilisé')
+        .setDescription(
+          `Le mot **${userWord}** (ou une de ses variantes) a déjà été joué dans ce canal.\n` +
+          (currentWord
+            ? `Essayez un mot différent lié à **${currentWord}**.`
+            : 'Le jeu va bientôt démarrer avec un nouveau mot.')
+        )
+        .setColor(0xff6b6b);
+      await message.channel.send({ content: `${message.author}`, embeds: [duplicateEmbed] });
+      return true;
+    }
+
     // Initialize game with first word
     if (!currentWord) {
+      // Fresh start: clear previous history so old mots are reusing allowed
+      await clearWordHistory(message.channel.id);
       await setWordGameState(message.channel.id, userWord, message.author.id, 0);
+      await addWordHistory(message.channel.id, userWord);
       await message.react('🎯');
       
       const startEmbed = new EmbedBuilder()
@@ -540,6 +609,7 @@ async function handleWordGame(message) {
     if (!isValid) {
       // Reset streak on error
       await setWordGameState(message.channel.id, null, null, 0);
+      await clearWordHistory(message.channel.id);
       await message.react('❌');
       await createWordGameErrorThread(message);
 
@@ -549,7 +619,7 @@ async function handleWordGame(message) {
           `**${userWord}** n'est pas suffisamment lié à **${currentWord}**.\n\n` +
           `**Raison :** ${explanation}\n\n` +
           `Le streak de **${channelStreak}** mot${channelStreak > 1 ? 's' : ''} est perdu ! 😢\n` +
-          `Relance en cours...`
+          `L'historique des mots est réinitialisé.\nRelance en cours...`
         )
         .setColor(0xff6b6b)
         .setTimestamp();
@@ -559,6 +629,7 @@ async function handleWordGame(message) {
       // Generate new starting word
       const newWord = await generateNewWord();
       await setWordGameState(message.channel.id, newWord, null, 0);
+      await addWordHistory(message.channel.id, newWord);
 
       const restartEmbed = new EmbedBuilder()
         .setTitle('🔄 Nouveau Départ')
@@ -577,6 +648,7 @@ async function handleWordGame(message) {
     const totalPoints = basePoints + streakBonus;
 
     await setWordGameState(message.channel.id, userWord, message.author.id, newStreak);
+    await addWordHistory(message.channel.id, userWord);
     await updateWordGameScore(message.author.id, message.channel.id, totalPoints, newStreak);
     await message.react('✅');
 
