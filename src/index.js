@@ -580,8 +580,9 @@ async function handleWordGame(message) {
     await updateWordGameScore(message.author.id, message.channel.id, totalPoints, newStreak);
     await message.react('✅');
 
-    // Show progress every 5 words or when bonus is earned
-    if (newStreak % 5 === 0 || streakBonus > 0) {
+    // Announce milestones only (5, 10, then every 50)
+    const shouldAnnounce = newStreak === 5 || newStreak === 10 || newStreak % 50 === 0;
+    if (shouldAnnounce) {
       const progressEmbed = new EmbedBuilder()
         .setDescription(
           `🔥 **Streak: ${newStreak}** mot${newStreak > 1 ? 's' : ''} !\n` +
