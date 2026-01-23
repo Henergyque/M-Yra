@@ -359,7 +359,7 @@ async function validateWordConnection(word1, word2) {
 
   try {
     const response = await openai.chat.completions.create({
-      model: 'gpt-5-2',
+      model: 'gpt-4o',
       messages: [
         {
           role: 'system',
@@ -391,7 +391,7 @@ async function validateWordConnection(word1, word2) {
 async function generateNewWord() {
   try {
     const response = await openai.chat.completions.create({
-      model: 'gpt-5-2',
+      model: 'gpt-4o',
       messages: [
         {
           role: 'system',
