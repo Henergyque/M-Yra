@@ -375,8 +375,9 @@ async function validateWordConnection(word1, word2) {
     });
 
     const content = response.choices[0]?.message?.content || '';
-    const isValid = content.toUpperCase().startsWith('YES');
-    const explanation = content.replace(/^(YES|NO)[:\s]*/i, '').trim();
+    const normalized = content.trim();
+    const isValid = /^(YES|OUI)\b/i.test(normalized);
+    const explanation = normalized.replace(/^(YES|OUI|NO|NON)\b[:\s-]*/i, '').trim();
 
     const result = { isValid, explanation };
     validatedPairs.set(cacheKey, result);
