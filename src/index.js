@@ -112,6 +112,17 @@ async function initializeDatabase() {
       PRIMARY KEY (channel_id, word)
     )
   `);
+  await runQuery(`
+    CREATE TABLE IF NOT EXISTS story_sessions (
+      channel_id TEXT PRIMARY KEY,
+      theme TEXT,
+      phrases TEXT,
+      contributors TEXT,
+      last_contributor_id TEXT,
+      started_at TEXT,
+      phrase_count INTEGER DEFAULT 0
+    )
+  `);
 }
 
 const client = new Client({
@@ -134,6 +145,9 @@ const actionVeriteLocks = new Map();
 const wordGameLocks = new Map();
 const validatedPairs = new Map();
 const openai = new OpenAI({ apiKey: config.openaiApiKey });
+
+// Story game state
+const activeStories = new Map();
 
 const quizDataPath = path.join(__dirname, '..', 'storage', 'quiz.json');
 const quizFallbackPath = path.join(__dirname, '..', 'storage', 'quiz.example.json');
@@ -742,6 +756,214 @@ async function handleWordStats(message) {
   return true;
 }
 
+// Story Collaborative Handlers
+
+async function handleStoryStart(message) {
+  const trimmed = message.content.trim();
+  if (!trimmed.startsWith('!story start')) {
+    return false;
+  }
+
+  const channelId = message.channel.id;
+
+  // Check if story already active
+  if (activeStories.has(channelId)) {
+    await message.reply('Une histoire est déjà en cours dans ce canal. Utilisez `!story end` pour la terminer.');
+    return true;
+  }
+
+  // Extract theme
+  const themeMatch = trimmed.match(/!story start(?:\s+"([^"]+)"|\s+(.+))?/);
+  let theme = themeMatch && (themeMatch[1] || themeMatch[2]) ? (themeMatch[1] || themeMatch[2]).trim() : 'Une histoire farfelue';
+
+  // Generate opening with OpenAI
+  let openingPhrase = 'Il était une fois...';
+  try {
+    const response = await openai.chat.completions.create({
+      model: 'gpt-4o',
+      messages: [
+        {
+          role: 'system',
+          content: 'Tu es un narrateur créatif. Crée l\'ouverture d\'une histoire basée sur le thème donné, en une seule phrase courte (max 30 mots).'
+        },
+        {
+          role: 'user',
+          content: `Thème: ${theme}`
+        }
+      ],
+      max_tokens: 100,
+      temperature: 0.8
+    });
+
+    openingPhrase = response.choices[0].message.content.trim();
+  } catch (err) {
+    console.error('Erreur génération d\'ouverture:', err);
+  }
+
+  // Initialize story
+  const story = {
+    theme,
+    phrases: [openingPhrase],
+    contributors: [message.author.id],
+    lastContributorId: message.author.id,
+    startedAt: new Date().toISOString()
+  };
+
+  activeStories.set(channelId, story);
+
+  // Save to database
+  await runQuery(
+    `INSERT OR REPLACE INTO story_sessions (channel_id, theme, phrases, contributors, last_contributor_id, started_at, phrase_count)
+     VALUES (?, ?, ?, ?, ?, ?, ?)`,
+    [channelId, theme, JSON.stringify([openingPhrase]), JSON.stringify([message.author.id]), message.author.id, story.startedAt, 1]
+  );
+
+  const startEmbed = new EmbedBuilder()
+    .setTitle('📖 Histoire Collaborative Lancée!')
+    .setDescription(`**Thème:** ${theme}`)
+    .addFields(
+      { name: '✨ Ouverture', value: openingPhrase, inline: false },
+      { name: '📝 Instructions', value: 'Tapez vos phrases pour continuer l\'histoire. Max 3 phrases par contribution, un tour par personne.', inline: false },
+      { name: '⏱️ Limite', value: 'L\'histoire s\'arrête à 75 phrases', inline: false }
+    )
+    .setColor(0x9d4edd)
+    .setAuthor({ name: message.author.username, iconURL: message.author.displayAvatarURL() })
+    .setTimestamp();
+
+  await message.channel.send({ embeds: [startEmbed] });
+  return true;
+}
+
+async function handleStoryEnd(message) {
+  const trimmed = message.content.trim();
+  if (!trimmed.startsWith('!story end')) {
+    return false;
+  }
+
+  const channelId = message.channel.id;
+
+  if (!activeStories.has(channelId)) {
+    await message.reply('Aucune histoire en cours dans ce canal.');
+    return true;
+  }
+
+  const story = activeStories.get(channelId);
+  await finishStory(message.channel, story);
+  activeStories.delete(channelId);
+  return true;
+}
+
+async function finishStory(channel, story) {
+  const fullText = story.phrases.join(' ');
+  let summary = 'Une histoire riche et captivante s\'est déroulée.';
+
+  try {
+    const response = await openai.chat.completions.create({
+      model: 'gpt-4o',
+      messages: [
+        {
+          role: 'system',
+          content: 'Tu es un critique littéraire. Écris un résumé court (2-3 phrases) de cette histoire en style narratif engageant.'
+        },
+        {
+          role: 'user',
+          content: `Histoire: ${fullText}`
+        }
+      ],
+      max_tokens: 200,
+      temperature: 0.7
+    });
+
+    summary = response.choices[0].message.content.trim();
+  } catch (err) {
+    console.error('Erreur génération résumé:', err);
+  }
+
+  const uniqueContributors = new Set(story.contributors).size;
+
+  const endEmbed = new EmbedBuilder()
+    .setTitle('📖 Histoire Terminée!')
+    .setDescription(summary)
+    .addFields(
+      { name: '🎭 Thème', value: story.theme, inline: true },
+      { name: '📝 Phrases', value: String(story.phrases.length), inline: true },
+      { name: '👥 Contributeurs', value: String(uniqueContributors), inline: true }
+    )
+    .setColor(0xc1121f)
+    .setTimestamp();
+
+  await channel.send({ embeds: [endEmbed] });
+
+  // Save to database with timestamp
+  await runQuery(
+    `UPDATE story_sessions SET phrases = ?, contributors = ?, phrase_count = ? WHERE channel_id = ?`,
+    [JSON.stringify(story.phrases), JSON.stringify(story.contributors), story.phrases.length, channel.id]
+  );
+}
+
+async function handleStoryContribution(message) {
+  const channelId = message.channel.id;
+
+  if (!activeStories.has(channelId)) {
+    return false;
+  }
+
+  const story = activeStories.get(channelId);
+
+  // Ignore command messages
+  if (message.content.trim().startsWith('!')) {
+    return false;
+  }
+
+  // Check if this user already contributed this turn
+  if (story.lastContributorId === message.author.id) {
+    await message.react('❌');
+    return true;
+  }
+
+  // Count phrases (roughly by punctuation marks)
+  const phraseCount = (message.content.match(/[.!?]/g) || []).length || 1;
+
+  if (phraseCount > 3) {
+    await message.reply('Max 3 phrases par contribution! 📝');
+    return true;
+  }
+
+  // Add contribution
+  story.phrases.push(message.content);
+  story.contributors.push(message.author.id);
+  story.lastContributorId = message.author.id;
+
+  // Check if story reached limit
+  if (story.phrases.length >= 75) {
+    await finishStory(message.channel, story);
+    activeStories.delete(channelId);
+    return true;
+  }
+
+  // Acknowledge contribution
+  const milestone = story.phrases.length;
+  if (milestone % 10 === 0) {
+    const progressEmbed = new EmbedBuilder()
+      .setTitle('📖 Progression')
+      .setDescription(`L'histoire atteint ${milestone} phrases! 🎉`)
+      .setColor(0x9d4edd)
+      .setTimestamp();
+    await message.react('✅');
+    await message.channel.send({ embeds: [progressEmbed] });
+  } else {
+    await message.react('✅');
+  }
+
+  // Update database
+  await runQuery(
+    `UPDATE story_sessions SET phrases = ?, contributors = ?, last_contributor_id = ?, phrase_count = ? WHERE channel_id = ?`,
+    [JSON.stringify(story.phrases), JSON.stringify(story.contributors), message.author.id, story.phrases.length, channelId]
+  );
+
+  return true;
+}
+
 function createActionVeriteEmbed() {
   return new EmbedBuilder()
     .setTitle('Action ou Vérité')
@@ -980,6 +1202,21 @@ client.on('messageCreate', async (message) => {
 
   const handledWordGame = await handleWordGame(message);
   if (handledWordGame) {
+    return;
+  }
+
+  const handledStoryStart = await handleStoryStart(message);
+  if (handledStoryStart) {
+    return;
+  }
+
+  const handledStoryEnd = await handleStoryEnd(message);
+  if (handledStoryEnd) {
+    return;
+  }
+
+  const handledStoryContribution = await handleStoryContribution(message);
+  if (handledStoryContribution) {
     return;
   }
 
