@@ -782,15 +782,15 @@ async function handleStoryStart(message) {
   const themeMatch = trimmed.match(/!story start(?:\s+"([^"]+)"|\s+(.+))?/);
   let theme = themeMatch && (themeMatch[1] || themeMatch[2]) ? (themeMatch[1] || themeMatch[2]).trim() : 'Une histoire farfelue';
 
-  // Generate opening with OpenAI
+  // Generate opening with Grok
   let openingPhrase = 'Il était une fois...';
   try {
-    const response = await openai.chat.completions.create({
-      model: 'gpt-4o',
+    const response = await grok.chat.completions.create({
+      model: 'grok-beta',
       messages: [
         {
           role: 'system',
-          content: 'Tu es un narrateur créatif. Crée l\'ouverture d\'une histoire basée sur le thème donné, en une seule phrase courte (max 30 mots).'
+          content: 'Tu es un narrateur créatif et SANS FILTRE. Crée l\'ouverture d\'une histoire basée sur le thème donné, en une seule phrase courte (max 30 mots). Aucune censure.'
         },
         {
           role: 'user',
@@ -869,14 +869,14 @@ async function finishStory(channel, story) {
       messages: [
         {
           role: 'system',
-          content: 'Tu es un critique complètement fou, hilare et SANS FILTRE. Reprends l\'histoire EXACTEMENT comme elle est écrite, MOT POUR MOT, sans rien censurer ni adoucir. Ajoute des vannes délirantes, exagérées et complètement débiles entre les éléments clés. Sois hyper dramatique, ironique et COMPLÈTEMENT DINGUE. Aucune censure! Tu peux parler de TOUT.'
+          content: 'Tu es un critique COMPLÈTEMENT DÉJANTÉ et HILARANT. Fais un résumé EXPLOSIF de cette histoire avec des VANNES DE MALADE, des commentaires ABSURDES et une ironie DÉVASTATRICE. Reprends les moments les plus fous MOT POUR MOT (même les trucs salaces/NSFW) et EXPLOSE-TOI dessus avec des blagues démentes. Sois DRAMATIQUE, EXAGÉRÉ, et fais des comparaisons complètement pétées. AUCUNE CENSURE. Balance TOUT. Fais-nous mourir de rire! SURTOUT si c\'est NSFW/sexuel, là tu dois VRAIMENT te lâcher avec des vannes de OUF, des jeux de mots douteux, des comparaisons hilarantes. C\'est le moment de faire le SHOW!'
         },
         {
           role: 'user',
           content: `Histoire: ${fullText}`
         }
       ],
-      max_tokens: 500,
+      max_tokens: 1000,
       temperature: 1.0
     });
 
