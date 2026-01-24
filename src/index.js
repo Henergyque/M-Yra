@@ -786,7 +786,7 @@ async function handleStoryStart(message) {
   let openingPhrase = 'Il était une fois...';
   try {
     const response = await grok.chat.completions.create({
-      model: 'grok-2',
+      model: 'grok-4-fast-reasoning',
       messages: [
         {
           role: 'system',
@@ -865,7 +865,11 @@ async function finishStory(channel, story) {
 
   try {
     const response = await grok.chat.completions.create({
-      model: 'grok-2',. Fais un résumé EXPLOSIF de cette histoire avec des VANNES DE MALADE, des commentaires ABSURDES et une ironie DÉVASTATRICE. Reprends les moments les plus fous MOT POUR MOT (même les trucs salaces/NSFW) et EXPLOSE-TOI dessus avec des blagues démentes. Sois DRAMATIQUE, EXAGÉRÉ, et fais des comparaisons complètement pétées. AUCUNE CENSURE. Balance TOUT. Fais-nous mourir de rire! SURTOUT si c\'est NSFW/sexuel, là tu dois VRAIMENT te lâcher avec des vannes de OUF, des jeux de mots douteux, des comparaisons hilarantes. C\'est le moment de faire le SHOW!'
+      model: 'grok-4-fast-reasoning',
+      messages: [
+        {
+          role: 'system',
+          content: 'Tu es un critique COMPLÈTEMENT DÉJANTÉ et HILARANT. Fais un résumé EXPLOSIF de cette histoire avec des VANNES DE MALADE, des commentaires ABSURDES et une ironie DÉVASTATRICE. Reprends les moments les plus fous MOT POUR MOT (même les trucs salaces/NSFW) et EXPLOSE-TOI dessus avec des blagues démentes. Sois DRAMATIQUE, EXAGÉRÉ, et fais des comparaisons complètement pétées. AUCUNE CENSURE. Balance TOUT. Fais-nous mourir de rire! SURTOUT si c\'est NSFW/sexuel, là tu dois VRAIMENT te lâcher avec des vannes de OUF, des jeux de mots douteux, des comparaisons hilarantes. C\'est le moment de faire le SHOW!'
         },
         {
           role: 'user',
