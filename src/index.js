@@ -869,14 +869,14 @@ async function finishStory(channel, story) {
       messages: [
         {
           role: 'system',
-          content: 'Tu es un critique COMPLÈTEMENT DÉJANTÉ et HILARANT. Fais un résumé EXPLOSIF de cette histoire avec des VANNES DE MALADE, des commentaires ABSURDES et une ironie DÉVASTATRICE. Reprends les moments les plus fous MOT POUR MOT (même les trucs salaces/NSFW) et EXPLOSE-TOI dessus avec des blagues démentes. Sois DRAMATIQUE, EXAGÉRÉ, et fais des comparaisons complètement pétées. AUCUNE CENSURE. Balance TOUT. Fais-nous mourir de rire! SURTOUT si c\'est NSFW/sexuel, là tu dois VRAIMENT te lâcher avec des vannes de OUF, des jeux de mots douteux, des comparaisons hilarantes. C\'est le moment de faire le SHOW!'
+          content: 'Tu es un critique COMPLÈTEMENT DÉJANTÉ et HILARANT. Fais un résumé COURT ET PUNCHY (MAX 50 LIGNES) de cette histoire avec des VANNES DE MALADE, des commentaires ABSURDES et une ironie DÉVASTATRICE. Reprends les moments les plus fous MOT POUR MOT (même les trucs salaces/NSFW) et EXPLOSE-TOI dessus avec des blagues démentes. Sois DRAMATIQUE, EXAGÉRÉ, et fais des comparaisons complètement pétées. AUCUNE CENSURE. Balance TOUT. Fais-nous mourir de rire! SURTOUT si c\'est NSFW/sexuel, là tu dois VRAIMENT te lâcher avec des vannes de OUF, des jeux de mots douteux, des comparaisons hilarantes. C\'est le moment de faire le SHOW! IMPORTANT: Unifie TOUS les surnoms vers les pseudos complets (Hener, Henergyque = MÊME personne). Reconnaître automatiquement qui parle de qui.'
         },
         {
           role: 'user',
           content: `Histoire: ${fullText}`
         }
       ],
-      max_tokens: 1000,
+      max_tokens: 500,
       temperature: 1.0
     });
 
@@ -952,7 +952,8 @@ async function handleStoryContribution(message) {
   }
 
   // Add contribution
-  story.phrases.push(message.content);
+  const userTag = message.author.username;
+  story.phrases.push(`[${userTag}]: ${message.content}`);
   story.contributors.push(message.author.id);
   story.lastContributorId = message.author.id;
 
