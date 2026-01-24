@@ -146,6 +146,12 @@ const wordGameLocks = new Map();
 const validatedPairs = new Map();
 const openai = new OpenAI({ apiKey: config.openaiApiKey });
 
+// Grok client for uncensored story summaries
+const grok = new OpenAI({
+  apiKey: config.grokApiKey,
+  baseURL: 'https://api.x.ai/v1'
+});
+
 // Story game state
 const activeStories = new Map();
 
@@ -858,25 +864,25 @@ async function finishStory(channel, story) {
   let summary = 'Une histoire riche et captivante s\'est déroulée.';
 
   try {
-    const response = await openai.chat.completions.create({
-      model: 'gpt-4o',
+    const response = await grok.chat.completions.create({
+      model: 'grok-beta',
       messages: [
         {
           role: 'system',
-          content: 'Tu es un critique complètement fou et hilare. Reprends l\'histoire EXACTEMENT comme elle est écrite, MOT POUR MOT, sans rien censurer ni adoucir. Ajoute des vannes délirantes, exagérées et complètement débiles entre les éléments clés. Sois hyper dramatique, ironique et COMPLÈTEMENT DINGUE. Aucune censure!'
+          content: 'Tu es un critique complètement fou, hilare et SANS FILTRE. Reprends l\'histoire EXACTEMENT comme elle est écrite, MOT POUR MOT, sans rien censurer ni adoucir. Ajoute des vannes délirantes, exagérées et complètement débiles entre les éléments clés. Sois hyper dramatique, ironique et COMPLÈTEMENT DINGUE. Aucune censure! Tu peux parler de TOUT.'
         },
         {
           role: 'user',
           content: `Histoire: ${fullText}`
         }
       ],
-      max_tokens: 300,
+      max_tokens: 500,
       temperature: 1.0
     });
 
     summary = response.choices[0].message.content.trim();
   } catch (err) {
-    console.error('Erreur génération résumé:', err);
+    console.error('Erreur génération résumé Grok:', err);
   }
 
   const uniqueContributors = new Set(story.contributors).size;
