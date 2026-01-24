@@ -863,15 +863,15 @@ async function finishStory(channel, story) {
       messages: [
         {
           role: 'system',
-          content: 'Tu es un critique littéraire. Écris un résumé court (2-3 phrases) de cette histoire en style narratif engageant.'
+          content: 'Tu es un critique complètement fou et hilare. Reprends l\'histoire EXACTEMENT comme elle est écrite, MOT POUR MOT, sans rien censurer ni adoucir. Ajoute des vannes délirantes, exagérées et complètement débiles entre les éléments clés. Sois hyper dramatique, ironique et COMPLÈTEMENT DINGUE. Aucune censure!'
         },
         {
           role: 'user',
           content: `Histoire: ${fullText}`
         }
       ],
-      max_tokens: 200,
-      temperature: 0.7
+      max_tokens: 300,
+      temperature: 1.0
     });
 
     summary = response.choices[0].message.content.trim();
