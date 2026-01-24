@@ -892,7 +892,22 @@ async function finishStory(channel, story) {
     .setColor(0xc1121f)
     .setTimestamp();
 
-  await channel.send({ embeds: [endEmbed] });
+  // Envoyer dans le salon bibliothèque
+  if (config.storyLibraryChannelId) {
+    try {
+      const libraryChannel = await client.channels.fetch(config.storyLibraryChannelId);
+      if (libraryChannel) {
+        await libraryChannel.send({ embeds: [endEmbed] });
+      }
+    } catch (err) {
+      console.error('Erreur envoi bibliothèque:', err);
+      // Fallback: envoyer dans le canal courant
+      await channel.send({ embeds: [endEmbed] });
+    }
+  } else {
+    // Si pas de config, envoyer dans le canal courant
+    await channel.send({ embeds: [endEmbed] });
+  }
 
   // Save to database with timestamp
   await runQuery(
