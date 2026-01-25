@@ -144,6 +144,8 @@ async function initializeDatabase() {
   try {
     await runQuery(`ALTER TABLE story_sessions ADD COLUMN is_waiting INTEGER DEFAULT 0`);
   } catch (e) {}
+
+  console.log('✅ Migration DB complétée');
 }
 
 const client = new Client({
