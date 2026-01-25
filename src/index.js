@@ -913,110 +913,118 @@ async function handleStoryContribution(message) {
 
 // Handle /story start (classic or roleplay mode)
 async function handleStorySlashStart(interaction) {
-  const channelId = interaction.channelId;
-  const theme = interaction.options.getString('theme');
-  const mode = interaction.options.getString('mode') || 'classic';
+  try {
+    const channelId = interaction.channelId;
+    const theme = interaction.options.getString('theme');
+    const mode = interaction.options.getString('mode') || 'classic';
 
-  if (activeStories.has(channelId)) {
-    await interaction.reply({ content: 'Une histoire est déjà en cours dans ce salon.', ephemeral: true });
-    return;
-  }
-
-  const story = {
-    theme,
-    mode,
-    phrases: [],
-    contributors: [],
-    lastContributorId: interaction.user.id,
-    startedAt: new Date().toISOString(),
-    roles: {},
-    waitingRoster: {},
-    isWaiting: mode === 'roleplay' ? 1 : 0
-  };
-
-  activeStories.set(channelId, story);
-
-  // Save to DB
-  await runQuery(
-    `INSERT OR REPLACE INTO story_sessions (channel_id, theme, mode, phrases, contributors, roles, last_contributor_id, started_at, phrase_count, waiting_roster, is_waiting)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-    [channelId, theme, mode, JSON.stringify([]), JSON.stringify([]), JSON.stringify({}), interaction.user.id, story.startedAt, 0, JSON.stringify({}), story.isWaiting]
-  );
-
-  if (mode === 'roleplay') {
-    // Waiting room for roleplay
-    const waitEmbed = new EmbedBuilder()
-      .setTitle('🎭 Roleplay - Salle d\'Attente')
-      .setDescription(`**Thème:** ${theme}`)
-      .addFields(
-        { name: '📝 Instructions', value: 'Utilisez `/story join` pour vous enregistrer avec un rôle.\nLe lanceur fait `/story ready` pour commencer.', inline: false },
-        { name: '👥 Roster', value: 'Aucun joueur inscrit pour le moment', inline: false }
-      )
-      .setColor(0x9d4edd)
-      .setAuthor({ name: interaction.user.username, iconURL: interaction.user.displayAvatarURL() })
-      .setTimestamp();
-
-    await interaction.reply({ embeds: [waitEmbed] });
-  } else {
-    // Classic mode: generate opening immediately
-    let openingPhrase = 'Il était une fois...';
-    try {
-      const response = await grok.chat.completions.create({
-        model: 'grok-4-fast-reasoning',
-        messages: [
-          {
-            role: 'system',
-            content: 'Tu es un narrateur créatif et SANS FILTRE. Crée l\'ouverture d\'une histoire basée sur le thème donné, en une seule phrase courte (max 30 mots). Aucune censure.'
-          },
-          {
-            role: 'user',
-            content: `Thème: ${theme}`
-          }
-        ],
-        max_tokens: 100,
-        temperature: 0.8
-      });
-
-      openingPhrase = response.choices[0].message.content.trim();
-    } catch (err) {
-      console.error('❌ Erreur Grok ouverture:', err.message);
+    if (activeStories.has(channelId)) {
+      await interaction.reply({ content: 'Une histoire est déjà en cours dans ce salon.', ephemeral: true });
+      return;
     }
 
-    story.phrases.push(openingPhrase);
-    story.contributors.push(interaction.user.id);
+    const story = {
+      theme,
+      mode,
+      phrases: [],
+      contributors: [],
+      lastContributorId: interaction.user.id,
+      startedAt: new Date().toISOString(),
+      roles: {},
+      waitingRoster: {},
+      isWaiting: mode === 'roleplay' ? 1 : 0
+    };
 
-    // Save opening to DB
+    activeStories.set(channelId, story);
+
+    // Save to DB
     await runQuery(
-      `UPDATE story_sessions SET phrases = ?, contributors = ?, phrase_count = ? WHERE channel_id = ?`,
-      [JSON.stringify(story.phrases), JSON.stringify(story.contributors), 1, channelId]
+      `INSERT OR REPLACE INTO story_sessions (channel_id, theme, mode, phrases, contributors, roles, last_contributor_id, started_at, phrase_count, waiting_roster, is_waiting)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [channelId, theme, mode, JSON.stringify([]), JSON.stringify([]), JSON.stringify({}), interaction.user.id, story.startedAt, 0, JSON.stringify({}), story.isWaiting]
     );
 
-    const startEmbed = new EmbedBuilder()
-      .setTitle('📖 Histoire Collective Lancée!')
-      .setDescription(`**Thème:** ${theme}`)
-      .addFields(
-        { name: '✨ Ouverture', value: openingPhrase, inline: false },
-        { name: '📝 Instructions', value: 'Écrivez vos phrases pour continuer l\'histoire. Max 3 phrases par contribution, une seule personne à la fois.', inline: false },
-        { name: '⏱️ Limite', value: 'L\'histoire s\'arrête à 75 phrases', inline: false }
-      )
-      .setColor(0x9d4edd)
-      .setAuthor({ name: interaction.user.username, iconURL: interaction.user.displayAvatarURL() })
-      .setTimestamp();
+    if (mode === 'roleplay') {
+      // Waiting room for roleplay
+      const waitEmbed = new EmbedBuilder()
+        .setTitle('🎭 Roleplay - Salle d\'Attente')
+        .setDescription(`**Thème:** ${theme}`)
+        .addFields(
+          { name: '📝 Instructions', value: 'Utilisez `/story join` pour vous enregistrer avec un rôle.\nLe lanceur fait `/story ready` pour commencer.', inline: false },
+          { name: '👥 Roster', value: 'Aucun joueur inscrit pour le moment', inline: false }
+        )
+        .setColor(0x9d4edd)
+        .setAuthor({ name: interaction.user.username, iconURL: interaction.user.displayAvatarURL() })
+        .setTimestamp();
 
-    await interaction.reply({ embeds: [startEmbed] });
+      await interaction.reply({ embeds: [waitEmbed] });
+    } else {
+      // Classic mode: generate opening immediately
+      let openingPhrase = 'Il était une fois...';
+      try {
+        const response = await grok.chat.completions.create({
+          model: 'grok-4-fast-reasoning',
+          messages: [
+            {
+              role: 'system',
+              content: 'Tu es un narrateur créatif et SANS FILTRE. Crée l\'ouverture d\'une histoire basée sur le thème donné, en une seule phrase courte (max 30 mots). Aucune censure.'
+            },
+            {
+              role: 'user',
+              content: `Thème: ${theme}`
+            }
+          ],
+          max_tokens: 100,
+          temperature: 0.8
+        });
+
+        openingPhrase = response.choices[0].message.content.trim();
+      } catch (grokErr) {
+        console.error('❌ Erreur Grok ouverture:', grokErr.message);
+      }
+
+      story.phrases.push(openingPhrase);
+      story.contributors.push(interaction.user.id);
+
+      // Save opening to DB
+      await runQuery(
+        `UPDATE story_sessions SET phrases = ?, contributors = ?, phrase_count = ? WHERE channel_id = ?`,
+        [JSON.stringify(story.phrases), JSON.stringify(story.contributors), 1, channelId]
+      );
+
+      const startEmbed = new EmbedBuilder()
+        .setTitle('📖 Histoire Collective Lancée!')
+        .setDescription(`**Thème:** ${theme}`)
+        .addFields(
+          { name: '✨ Ouverture', value: openingPhrase, inline: false },
+          { name: '📝 Instructions', value: 'Écrivez vos phrases pour continuer l\'histoire. Max 3 phrases par contribution, une seule personne à la fois.', inline: false },
+          { name: '⏱️ Limite', value: 'L\'histoire s\'arrête à 75 phrases', inline: false }
+        )
+        .setColor(0x9d4edd)
+        .setAuthor({ name: interaction.user.username, iconURL: interaction.user.displayAvatarURL() })
+        .setTimestamp();
+
+      await interaction.reply({ embeds: [startEmbed] });
+    }
+  } catch (err) {
+    console.error('❌ Erreur handleStorySlashStart:', err);
+    try {
+      await interaction.reply({ content: '❌ Erreur: ' + err.message, ephemeral: true });
+    } catch {}
   }
 }
 
 // Handle /story join (roleplay mode)
 async function handleStorySlashJoin(interaction) {
-  const channelId = interaction.channelId;
-  const role = interaction.options.getString('role');
+  try {
+    const channelId = interaction.channelId;
+    const role = interaction.options.getString('role');
 
-  const story = activeStories.get(channelId);
-  if (!story) {
-    await interaction.reply({ content: 'Aucune histoire en cours dans ce salon.', ephemeral: true });
-    return;
-  }
+    const story = activeStories.get(channelId);
+    if (!story) {
+      await interaction.reply({ content: 'Aucune histoire en cours dans ce salon.', ephemeral: true });
+      return;
+    }
 
   if (story.mode === 'classic') {
     await interaction.reply({ content: 'Commande roleplay uniquement. Utilisez le mode roleplay avec `/story start`.', ephemeral: true });
@@ -1067,100 +1075,120 @@ async function handleStorySlashJoin(interaction) {
 
     await interaction.reply({ content: `✅ ${role} rejoint l'histoire!\n${transition}`, ephemeral: false });
   }
+  } catch (err) {
+    console.error('❌ Erreur handleStorySlashJoin:', err);
+    try {
+      await interaction.reply({ content: '❌ Erreur: ' + err.message, ephemeral: true });
+    } catch {}
+  }
 }
 
 // Handle /story ready (start from waiting phase)
 async function handleStorySlashReady(interaction) {
-  const channelId = interaction.channelId;
-  const story = activeStories.get(channelId);
-
-  if (!story) {
-    await interaction.reply({ content: 'Aucune histoire en cours.', ephemeral: true });
-    return;
-  }
-
-  if (!story.isWaiting || story.mode !== 'roleplay') {
-    await interaction.reply({ content: 'Cette histoire n\'est pas en mode d\'attente roleplay.', ephemeral: true });
-    return;
-  }
-
-  if (Object.keys(story.waitingRoster).length === 0) {
-    await interaction.reply({ content: 'Aucun joueur inscrit. Faites `/story join` d\'abord.', ephemeral: true });
-    return;
-  }
-
-  // Confirm launch
-  story.isWaiting = 0;
-  story.roles = { ...story.waitingRoster };
-  story.contributors = Object.keys(story.waitingRoster);
-  story.lastContributorId = null;
-
-  // Generate opening with roster
-  let openingPhrase = 'Il était une fois...';
-  const rosterList = Object.values(story.roles).map(r => `${r.role} (${r.username})`).join(', ');
-
   try {
-    const response = await grok.chat.completions.create({
-      model: 'grok-4-fast-reasoning',
-      messages: [
-        {
-          role: 'system',
-          content: 'Tu es un narrateur créatif. Génère une ouverture (1-2 phrases max) d\'histoire qui introduit naturellement les personnages donnés. Sois DRÔLE si possible.'
-        },
-        {
-          role: 'user',
-          content: `Thème: ${story.theme}\nPersonnages: ${rosterList}`
-        }
-      ],
-      max_tokens: 100,
-      temperature: 0.8
-    });
+    const channelId = interaction.channelId;
+    const story = activeStories.get(channelId);
 
-    openingPhrase = response.choices[0].message.content.trim();
+    if (!story) {
+      await interaction.reply({ content: 'Aucune histoire en cours.', ephemeral: true });
+      return;
+    }
+
+    if (!story.isWaiting || story.mode !== 'roleplay') {
+      await interaction.reply({ content: 'Cette histoire n\'est pas en mode d\'attente roleplay.', ephemeral: true });
+      return;
+    }
+
+    if (Object.keys(story.waitingRoster).length === 0) {
+      await interaction.reply({ content: 'Aucun joueur inscrit. Faites `/story join` d\'abord.', ephemeral: true });
+      return;
+    }
+
+    // Confirm launch
+    story.isWaiting = 0;
+    story.roles = { ...story.waitingRoster };
+    story.contributors = Object.keys(story.waitingRoster);
+    story.lastContributorId = null;
+
+    // Generate opening with roster
+    let openingPhrase = 'Il était une fois...';
+    const rosterList = Object.values(story.roles).map(r => `${r.role} (${r.username})`).join(', ');
+
+    try {
+      const response = await grok.chat.completions.create({
+        model: 'grok-4-fast-reasoning',
+        messages: [
+          {
+            role: 'system',
+            content: 'Tu es un narrateur créatif. Génère une ouverture (1-2 phrases max) d\'histoire qui introduit naturellement les personnages donnés. Sois DRÔLE si possible.'
+          },
+          {
+            role: 'user',
+            content: `Thème: ${story.theme}\nPersonnages: ${rosterList}`
+          }
+        ],
+        max_tokens: 100,
+        temperature: 0.8
+      });
+
+      openingPhrase = response.choices[0].message.content.trim();
+    } catch (err) {
+      console.error('❌ Erreur Grok ouverture roleplay:', err.message);
+    }
+
+    story.phrases.push(openingPhrase);
+
+    // Update DB
+    await runQuery(
+      `UPDATE story_sessions SET phrases = ?, roles = ?, is_waiting = 0, phrase_count = 1 WHERE channel_id = ?`,
+      [JSON.stringify(story.phrases), JSON.stringify(story.roles), channelId]
+    );
+
+    const rosterText = Object.values(story.roles)
+      .map(r => `• **${r.role}** - ${r.username}`)
+      .join('\n');
+
+    const startEmbed = new EmbedBuilder()
+      .setTitle('🎭 Roleplay Lancé!')
+      .setDescription(`**Thème:** ${story.theme}`)
+      .addFields(
+        { name: '✨ Ouverture', value: openingPhrase, inline: false },
+        { name: '👥 Personnages', value: rosterText, inline: false },
+        { name: '📝 Règles', value: 'Contributions libres, max 3 phrases par tour. Pas deux fois d\'affilée!', inline: false }
+      )
+      .setColor(0x9d4edd)
+      .setAuthor({ name: interaction.user.username, iconURL: interaction.user.displayAvatarURL() })
+      .setTimestamp();
+
+    await interaction.reply({ embeds: [startEmbed] });
   } catch (err) {
-    console.error('❌ Erreur Grok ouverture roleplay:', err.message);
+    console.error('❌ Erreur handleStorySlashReady:', err);
+    try {
+      await interaction.reply({ content: '❌ Erreur: ' + err.message, ephemeral: true });
+    } catch {}
   }
-
-  story.phrases.push(openingPhrase);
-
-  // Update DB
-  await runQuery(
-    `UPDATE story_sessions SET phrases = ?, roles = ?, is_waiting = 0, phrase_count = 1 WHERE channel_id = ?`,
-    [JSON.stringify(story.phrases), JSON.stringify(story.roles), channelId]
-  );
-
-  const rosterText = Object.values(story.roles)
-    .map(r => `• **${r.role}** - ${r.username}`)
-    .join('\n');
-
-  const startEmbed = new EmbedBuilder()
-    .setTitle('🎭 Roleplay Lancé!')
-    .setDescription(`**Thème:** ${story.theme}`)
-    .addFields(
-      { name: '✨ Ouverture', value: openingPhrase, inline: false },
-      { name: '👥 Personnages', value: rosterText, inline: false },
-      { name: '📝 Règles', value: 'Contributions libres, max 3 phrases par tour. Pas deux fois d\'affilée!', inline: false }
-    )
-    .setColor(0x9d4edd)
-    .setAuthor({ name: interaction.user.username, iconURL: interaction.user.displayAvatarURL() })
-    .setTimestamp();
-
-  await interaction.reply({ embeds: [startEmbed] });
 }
 
 // Handle /story end
 async function handleStorySlashEnd(interaction) {
-  const channelId = interaction.channelId;
-  const story = activeStories.get(channelId);
+  try {
+    const channelId = interaction.channelId;
+    const story = activeStories.get(channelId);
 
-  if (!story) {
-    await interaction.reply({ content: 'Aucune histoire en cours.', ephemeral: true });
-    return;
+    if (!story) {
+      await interaction.reply({ content: 'Aucune histoire en cours.', ephemeral: true });
+      return;
+    }
+
+    await finishStory(interaction.channel, story);
+    activeStories.delete(channelId);
+    await interaction.reply({ content: '✅ Histoire terminée!', ephemeral: true });
+  } catch (err) {
+    console.error('❌ Erreur handleStorySlashEnd:', err);
+    try {
+      await interaction.reply({ content: '❌ Erreur: ' + err.message, ephemeral: true });
+    } catch {}
   }
-
-  await finishStory(interaction.channel, story);
-  activeStories.delete(channelId);
-  await interaction.reply({ content: '✅ Histoire terminée!', ephemeral: true });
 }
 
 function createActionVeriteEmbed() {
@@ -1475,25 +1503,32 @@ client.once('ready', async () => {
 client.on('interactionCreate', async (interaction) => {
   // Handle slash commands
   if (interaction.isChatInputCommand()) {
-    const { commandName, options } = interaction;
+    try {
+      const { commandName, options } = interaction;
 
-    if (commandName === 'ping') {
-      await interaction.reply(`🏓 Pong! Latence: ${client.ws.ping}ms`);
-      return;
-    }
-
-    if (commandName === 'story') {
-      const subcommand = options.getSubcommand();
-
-      if (subcommand === 'start') {
-        await handleStorySlashStart(interaction);
-      } else if (subcommand === 'join') {
-        await handleStorySlashJoin(interaction);
-      } else if (subcommand === 'ready') {
-        await handleStorySlashReady(interaction);
-      } else if (subcommand === 'end') {
-        await handleStorySlashEnd(interaction);
+      if (commandName === 'ping') {
+        await interaction.reply(`🏓 Pong! Latence: ${client.ws.ping}ms`);
+        return;
       }
+
+      if (commandName === 'story') {
+        const subcommand = options.getSubcommand();
+
+        if (subcommand === 'start') {
+          await handleStorySlashStart(interaction);
+        } else if (subcommand === 'join') {
+          await handleStorySlashJoin(interaction);
+        } else if (subcommand === 'ready') {
+          await handleStorySlashReady(interaction);
+        } else if (subcommand === 'end') {
+          await handleStorySlashEnd(interaction);
+        }
+      }
+    } catch (err) {
+      console.error('❌ Erreur slash command:', err);
+      try {
+        await interaction.reply({ content: '❌ Une erreur est survenue.', ephemeral: true });
+      } catch {}
     }
     return;
   }
