@@ -1433,6 +1433,9 @@ client.once('ready', async () => {
     if (guild) {
       const commands = [
         new SlashCommandBuilder()
+          .setName('ping')
+          .setDescription('Vérifier que le bot fonctionne'),
+        new SlashCommandBuilder()
           .setName('story')
           .setDescription('Gestionnaire d\'histoires collaboratives')
           .addSubcommand(sub =>
@@ -1473,6 +1476,11 @@ client.on('interactionCreate', async (interaction) => {
   // Handle slash commands
   if (interaction.isChatInputCommand()) {
     const { commandName, options } = interaction;
+
+    if (commandName === 'ping') {
+      await interaction.reply(`🏓 Pong! Latence: ${client.ws.ping}ms`);
+      return;
+    }
 
     if (commandName === 'story') {
       const subcommand = options.getSubcommand();
