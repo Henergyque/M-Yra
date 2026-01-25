@@ -1139,6 +1139,9 @@ async function handleStorySlashReady(interaction) {
     story.contributors = Object.keys(story.waitingRoster);
     story.lastContributorId = null;
 
+    // Defer reply pour éviter timeout si Grok est lent
+    await interaction.deferReply();
+
     // Generate opening with roster
     let openingPhrase = 'Il était une fois...';
     const rosterList = Object.values(story.roles).map(r => `${r.role} (${r.username})`).join(', ');
@@ -1189,7 +1192,7 @@ async function handleStorySlashReady(interaction) {
       .setAuthor({ name: interaction.user.username, iconURL: interaction.user.displayAvatarURL() })
       .setTimestamp();
 
-    await interaction.reply({ embeds: [startEmbed] });
+    await interaction.editReply({ embeds: [startEmbed] });
   } catch (err) {
     console.error('❌ Erreur handleStorySlashReady:', err);
     try {
@@ -1211,7 +1214,9 @@ async function handleStorySlashEnd(interaction) {
 
     await finishStory(interaction.channel, story);
     activeStories.delete(channelId);
-    await interaction.reply({ content: '✅ Histoire terminée!', ephemeral: true });
+    
+    const libraryChannelName = config.storyLibraryChannelId ? '<#' + config.storyLibraryChannelId + '>' : 'la Bibliothèque';
+    await interaction.reply({ content: `✅ Histoire terminée et envoyée dans ${libraryChannelName}!`, ephemeral: false });
   } catch (err) {
     console.error('❌ Erreur handleStorySlashEnd:', err);
     try {
