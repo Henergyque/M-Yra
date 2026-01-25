@@ -954,6 +954,34 @@ async function handleStoryContribution(message) {
   return true;
 }
 
+// Handle /clear command
+async function handleClearCommand(interaction) {
+  try {
+    // Vérifier que c'est le creator
+    if (interaction.user.id !== config.creatorId) {
+      await interaction.reply({ content: '❌ Seul le créateur du bot peut utiliser cette commande.', ephemeral: true });
+      return;
+    }
+
+    const nombre = interaction.options.getInteger('nombre');
+
+    // Defer la réponse car ça peut prendre du temps
+    await interaction.deferReply();
+
+    // Supprimer les messages
+    const messages = await interaction.channel.messages.fetch({ limit: nombre });
+    const deleted = await interaction.channel.bulkDelete(messages, true);
+
+    // Répondre avec le nombre de messages supprimés
+    await interaction.editReply({ content: `✅ ${deleted.size} messages ont été supprimés dans ce salon.` });
+  } catch (err) {
+    console.error('❌ Erreur /clear:', err);
+    try {
+      await interaction.reply({ content: '❌ Erreur: ' + err.message, ephemeral: true });
+    } catch {}
+  }
+}
+
 // Roleplay/Story Slash Commands
 
 // Handle /story start (classic or roleplay mode)
@@ -1547,6 +1575,20 @@ client.once('ready', async () => {
           )
       ];
 
+      // Ajouter la commande /clear
+      commands.push(
+        new SlashCommandBuilder()
+          .setName('clear')
+          .setDescription('Supprimer des messages dans le salon')
+          .addIntegerOption(opt =>
+            opt.setName('nombre')
+              .setDescription('Nombre de messages à supprimer (1-100)')
+              .setRequired(true)
+              .setMinValue(1)
+              .setMaxValue(100)
+          )
+      );
+
       await guild.commands.set(commands);
       console.log('✅ Slash commands enregistrées');
     }
@@ -1563,6 +1605,11 @@ client.on('interactionCreate', async (interaction) => {
 
       if (commandName === 'ping') {
         await interaction.reply(`🏓 Pong! Latence: ${client.ws.ping}ms`);
+        return;
+      }
+
+      if (commandName === 'clear') {
+        await handleClearCommand(interaction);
         return;
       }
 
