@@ -128,6 +128,22 @@ async function initializeDatabase() {
       is_waiting INTEGER DEFAULT 0
     )
   `);
+
+  // Migration: Add missing columns if they don't exist
+  try {
+    await runQuery(`ALTER TABLE story_sessions ADD COLUMN mode TEXT DEFAULT 'classic'`);
+  } catch (e) {
+    // Column already exists or other error - ignore
+  }
+  try {
+    await runQuery(`ALTER TABLE story_sessions ADD COLUMN roles TEXT DEFAULT '{}'`);
+  } catch (e) {}
+  try {
+    await runQuery(`ALTER TABLE story_sessions ADD COLUMN waiting_roster TEXT DEFAULT '{}'`);
+  } catch (e) {}
+  try {
+    await runQuery(`ALTER TABLE story_sessions ADD COLUMN is_waiting INTEGER DEFAULT 0`);
+  } catch (e) {}
 }
 
 const client = new Client({
