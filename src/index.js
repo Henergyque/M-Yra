@@ -129,23 +129,34 @@ async function initializeDatabase() {
     )
   `);
 
-  // Migration: Add missing columns if they don't exist
+  // Migration: Add missing columns to existing table
   try {
-    await runQuery(`ALTER TABLE story_sessions ADD COLUMN mode TEXT DEFAULT 'classic'`);
-  } catch (e) {
-    // Column already exists or other error - ignore
-  }
-  try {
-    await runQuery(`ALTER TABLE story_sessions ADD COLUMN roles TEXT DEFAULT '{}'`);
-  } catch (e) {}
-  try {
-    await runQuery(`ALTER TABLE story_sessions ADD COLUMN waiting_roster TEXT DEFAULT '{}'`);
-  } catch (e) {}
-  try {
-    await runQuery(`ALTER TABLE story_sessions ADD COLUMN is_waiting INTEGER DEFAULT 0`);
-  } catch (e) {}
+    console.log('🔧 Vérification migration DB...');
+    const tables = await new Promise((resolve, reject) => {
+      db.all(`PRAGMA table_info(story_sessions)`, (err, rows) => {
+        if (err) reject(err);
+        else resolve(rows || []);
+      });
+    });
 
-  console.log('✅ Migration DB complétée');
+    const columnNames = tables.map(r => r.name);
+    const neededColumns = [
+      { name: 'mode', sql: `ALTER TABLE story_sessions ADD COLUMN mode TEXT DEFAULT 'classic'` },
+      { name: 'roles', sql: `ALTER TABLE story_sessions ADD COLUMN roles TEXT DEFAULT '{}'` },
+      { name: 'waiting_roster', sql: `ALTER TABLE story_sessions ADD COLUMN waiting_roster TEXT DEFAULT '{}'` },
+      { name: 'is_waiting', sql: `ALTER TABLE story_sessions ADD COLUMN is_waiting INTEGER DEFAULT 0` }
+    ];
+
+    for (const col of neededColumns) {
+      if (!columnNames.includes(col.name)) {
+        console.log(`  ➕ Ajout colonne: ${col.name}`);
+        await runQuery(col.sql);
+      }
+    }
+    console.log('✅ Migration DB complétée');
+  } catch (err) {
+    console.error('❌ Erreur migration:', err);
+  }
 }
 
 const client = new Client({
