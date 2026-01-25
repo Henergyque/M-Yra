@@ -803,12 +803,28 @@ async function finishStory(channel, story) {
   let summary = 'Une histoire riche et captivante s\'est déroulée.';
 
   try {
+    let systemPrompt;
+    
+    if (story.mode === 'roleplay') {
+      // Pour roleplay: paroles dramatiques avec verbes expressifs
+      systemPrompt = `Tu es un narrateur dramatique et HILARANT. Fais un résumé (MAX 50 LIGNES) du roleplay avec des répliques des personnages accompagnées de verbes EXPRESSIFS et DRAMATIQUES. 
+
+VERBES À UTILISER: s'exclama, hurla, murmura, cria, gémit, haleta, souffla, chuchota, gronda, rugit, grogna, soupira, bégaya, bredouilla, clama, proclama, déclara solennellement, supplia, implora, ricana, rit, sanglota, pleura, trembla, balbutia, etc.
+
+Exemple: "Henergyque s'exclama avec passion: 'C'est GENIAL!'" ou "Le super-héros hurla d'indignation: 'NON, C'EST IMPOSSIBLE!'"
+
+Rends ça DRAMATIQUE, ABSURDE et HILARANT! Ajoute des didascalies avec des actions entre crochets [pause dramatique], [regarde fixement], [s'effondre], etc. AUCUNE CENSURE. Si c'est NSFW, va-y à fond avec les vannes!`;
+    } else {
+      // Pour classic: résumé critique normal
+      systemPrompt = 'Tu es un critique COMPLÈTEMENT DÉJANTÉ et HILARANT. Fais un résumé COURT ET PUNCHY (MAX 50 LIGNES) de cette histoire avec des VANNES DE MALADE, des commentaires ABSURDES et une ironie DÉVASTATRICE. Reprends les moments les plus fous MOT POUR MOT (même les trucs salaces/NSFW) et EXPLOSE-TOI dessus avec des blagues démentes. Sois DRAMATIQUE, EXAGÉRÉ, et fais des comparaisons complètement pétées. AUCUNE CENSURE. Balance TOUT. Fais-nous mourir de rire! SURTOUT si c\'est NSFW/sexuel, là tu dois VRAIMENT te lâcher avec des vannes de OUF, des jeux de mots douteux, des comparaisons hilarantes. C\'est le moment de faire le SHOW! IMPORTANT: Unifie TOUS les surnoms vers les pseudos complets (Hener, Henergyque = MÊME personne). Reconnaître automatiquement qui parle de qui.';
+    }
+
     const response = await grok.chat.completions.create({
       model: 'grok-4-fast-reasoning',
       messages: [
         {
           role: 'system',
-          content: 'Tu es un critique COMPLÈTEMENT DÉJANTÉ et HILARANT. Fais un résumé COURT ET PUNCHY (MAX 50 LIGNES) de cette histoire avec des VANNES DE MALADE, des commentaires ABSURDES et une ironie DÉVASTATRICE. Reprends les moments les plus fous MOT POUR MOT (même les trucs salaces/NSFW) et EXPLOSE-TOI dessus avec des blagues démentes. Sois DRAMATIQUE, EXAGÉRÉ, et fais des comparaisons complètement pétées. AUCUNE CENSURE. Balance TOUT. Fais-nous mourir de rire! SURTOUT si c\'est NSFW/sexuel, là tu dois VRAIMENT te lâcher avec des vannes de OUF, des jeux de mots douteux, des comparaisons hilarantes. C\'est le moment de faire le SHOW! IMPORTANT: Unifie TOUS les surnoms vers les pseudos complets (Hener, Henergyque = MÊME personne). Reconnaître automatiquement qui parle de qui.'
+          content: systemPrompt
         },
         {
           role: 'user',
@@ -974,7 +990,7 @@ async function handleStorySlashStart(interaction) {
     );
 
     if (mode === 'roleplay') {
-      // Waiting room for roleplay
+      // Waiting room for roleplay (rapide, pas de defer nécessaire)
       const waitEmbed = new EmbedBuilder()
         .setTitle('🎭 Roleplay - Salle d\'Attente')
         .setDescription(`**Thème:** ${theme}`)
@@ -988,7 +1004,9 @@ async function handleStorySlashStart(interaction) {
 
       await interaction.reply({ embeds: [waitEmbed] });
     } else {
-      // Classic mode: generate opening immediately
+      // Classic mode: defer car Grok peut être lent
+      await interaction.deferReply();
+
       let openingPhrase = 'Il était une fois...';
       try {
         const response = await grok.chat.completions.create({
@@ -1033,7 +1051,7 @@ async function handleStorySlashStart(interaction) {
         .setAuthor({ name: interaction.user.username, iconURL: interaction.user.displayAvatarURL() })
         .setTimestamp();
 
-      await interaction.reply({ embeds: [startEmbed] });
+      await interaction.editReply({ embeds: [startEmbed] });
     }
   } catch (err) {
     console.error('❌ Erreur handleStorySlashStart:', err);
@@ -1212,11 +1230,14 @@ async function handleStorySlashEnd(interaction) {
       return;
     }
 
+    // Defer car finishStory utilise Grok (peut être lent)
+    await interaction.deferReply();
+
     await finishStory(interaction.channel, story);
     activeStories.delete(channelId);
     
     const libraryChannelName = config.storyLibraryChannelId ? '<#' + config.storyLibraryChannelId + '>' : 'la Bibliothèque';
-    await interaction.reply({ content: `✅ Histoire terminée et envoyée dans ${libraryChannelName}!`, ephemeral: false });
+    await interaction.editReply({ content: `✅ Histoire terminée et envoyée dans ${libraryChannelName}!` });
   } catch (err) {
     console.error('❌ Erreur handleStorySlashEnd:', err);
     try {
