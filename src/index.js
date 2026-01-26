@@ -954,6 +954,47 @@ async function handleStoryContribution(message) {
   return true;
 }
 
+// Handle /roast command
+async function handleRoastCommand(interaction) {
+  try {
+    const targetUser = interaction.options.getUser('cible');
+
+    // Defer car Grok peut être lent
+    await interaction.deferReply();
+
+    let roast = '🔥 Cette personne est tellement chiante qu\'elle fait fuir même les bugs!';
+
+    try {
+      const response = await grok.chat.completions.create({
+        model: 'grok-4-fast-reasoning',
+        messages: [
+          {
+            role: 'system',
+            content: `Tu es un comédien HILARANT et SANS FILTRE. Génère une insulte drôle et ABSURDE envers une personne. Sois BRUTAL, EXAGÉRÉ et STUPIDEMENT DRÔLE! Utilise des comparaisons pétées, des métaphores bizarres, et des blagues dégueulasses si possible. MAX 3 phrases. AUCUNE CENSURE - va-y hardcore!`
+          },
+          {
+            role: 'user',
+            content: `Insulte drôlement: ${targetUser.username}`
+          }
+        ],
+        max_tokens: 200,
+        temperature: 1.0
+      });
+
+      roast = response.choices[0].message.content.trim();
+    } catch (err) {
+      console.error('❌ Erreur Grok roast:', err.message);
+    }
+
+    await interaction.editReply({ content: `🔥 **${targetUser.username}**: ${roast}` });
+  } catch (err) {
+    console.error('❌ Erreur /roast:', err);
+    try {
+      await interaction.reply({ content: '❌ Erreur: ' + err.message, ephemeral: true });
+    } catch {}
+  }
+}
+
 // Handle /clear command
 async function handleClearCommand(interaction) {
   try {
@@ -1589,6 +1630,18 @@ client.once('ready', async () => {
           )
       );
 
+      // Ajouter la commande /roast
+      commands.push(
+        new SlashCommandBuilder()
+          .setName('roast')
+          .setDescription('Insulter quelqu\'un de façon hilarante')
+          .addUserOption(opt =>
+            opt.setName('cible')
+              .setDescription('La personne à insulter')
+              .setRequired(true)
+          )
+      );
+
       await guild.commands.set(commands);
       console.log('✅ Slash commands enregistrées');
     }
@@ -1610,6 +1663,11 @@ client.on('interactionCreate', async (interaction) => {
 
       if (commandName === 'clear') {
         await handleClearCommand(interaction);
+        return;
+      }
+
+      if (commandName === 'roast') {
+        await handleRoastCommand(interaction);
         return;
       }
 
