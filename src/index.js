@@ -2279,7 +2279,7 @@ async function handleAIAssistant(message) {
         if (monitorAction) {
           const userIdMatch = monitorAction[1].match(/\d+/);
           const userId = userIdMatch ? userIdMatch[0] : monitorAction[1];
-          const cleanResponse = mergedResponse.replace(/\[\[MONITOR:[^\]]+\]\]/, '').trim();
+          const cleanResponse = assistantResponse.replace(/\[\[MONITOR:[^\]]+\]\]/, '').trim();
           if (cleanResponse) await message.channel.send(cleanResponse);
           if (!global.monitoredUsers) global.monitoredUsers = new Map();
           global.monitoredUsers.set(userId, { channelId: message.channelId, since: new Date() });
@@ -2305,16 +2305,18 @@ async function handleAIAssistant(message) {
 // Get Claude response for assistant (natural, human tone)
 async function getClaudeAssistantResponse(question, context, isCreator = false) {
   try {
-    const systemPrompt = `Réponds comme une personne normale sur Discord.
+    const systemPrompt = `Réponds naturellement en 1-2 phrases. Pas de markdown, pas de smileys forcés.
 
-- Court et direct (1-2 phrases max)
-- Pas de smileys forcés
-- Pas de questions inutiles à la fin
+${isCreator ? `Si action demandée, utilise UN SEUL code:
+- [[DELETE:X]] pour supprimer X messages
+- [[BAN:userId]] pour ban
+- [[KICK:userId]] pour kick
+- [[MUTE:userId:duration]] pour mute
+- [[MONITOR:userId]] pour surveiller
+- [[CODE_MODIFY]] pour modifier le code du bot
+- [[CODE_GEN]] pour générer du code
 
-${isCreator ? `Tu peux agir. Si on demande action:
-[[DELETE:X]] [[BAN:userId]] [[KICK:userId]] [[MUTE:userId:duration]] [[MONITOR:userId]] [[CODE_MODIFY]] [[CODE_GEN]]
-
-Si question sur features bot, utilise le code fourni.` : ''}`;
+Utilise le code fourni si question sur bot.` : ''}`;
 
     const response = await claude.messages.create({
       model: 'claude-sonnet-4-5-20250929',
