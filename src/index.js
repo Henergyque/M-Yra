@@ -2632,8 +2632,48 @@ async function applyCodeModification(message, modInfo) {
 
     const updatedCode = currentCode.slice(0, insertPosition) + '\n\n' + codeToAdd + '\n\n' + currentCode.slice(insertPosition);
 
+    // Show preview of insertion with context before applying
+    const contextBefore = currentCode.slice(Math.max(0, insertPosition - 200), insertPosition).trim().split('\n').slice(-5).join('\n');
+    const contextAfter = currentCode.slice(insertPosition, insertPosition + 200).trim().split('\n').slice(0, 5).join('\n');
+    
+    const preview = `📍 **Aperçu de l'insertion:**\n\n\`\`\`javascript\n// ⬆️ AVANT (ligne ~${currentCode.slice(0, insertPosition).split('\n').length}):\n${contextBefore}\n\n// ➕ CODE À INSÉRER:\n${codeToAdd}\n\n// ⬇️ APRÈS:\n${contextAfter}\n\`\`\`\n\n✅ Réponds **"oui"** pour confirmer l'insertion\n❌ Réponds **"non"** pour annuler`;
+    
+    await message.channel.send(preview);
+    
+    // Store pending insertion for approval
+    const insertionId = `${message.author.id}_insert_${Date.now()}`;
+    const pendingInsertions = global.pendingInsertions || new Map();
+    pendingInsertions.set(insertionId, {
+      userId: message.author.id,
+      channelId: message.channelId,
+      updatedCode: updatedCode,
+      filePath: filePath,
+      isMajorChange: isMajorChange,
+      question: modInfo.question,
+      timestamp: Date.now()
+    });
+    global.pendingInsertions = pendingInsertions;
+    
+    return; // Wait for user approval before writing file
+  } catch (error) {
+    console.error('❌ Erreur application modification:', error);
+    await message.channel.send(`❌ Erreur lors de l'application: ${error.message}`);
+  }
+}
+
+// Apply approved insertion (called after user says "oui")
+async function applyApprovedInsertion(message, insertion) {
+  try {
+    // Validate syntax
+    try {
+      new Function(insertion.updatedCode);
+    } catch (syntaxError) {
+      await message.channel.send(`❌ Erreur de syntaxe détectée:\n\`\`\`\n${syntaxError.message}\n\`\`\`\n\nInsertion annulée.`);
+      return;
+    }
+
     // Write the modified code
-    fs.writeFileSync(filePath, updatedCode, 'utf-8');
+    fs.writeFileSync(insertion.filePath, insertion.updatedCode, 'utf-8');
 
     // Try to create git branch and commit
     try {
@@ -2654,7 +2694,7 @@ async function applyCodeModification(message, modInfo) {
         execSync(`cd "${repoPath}" && git add src/index.js`, { stdio: 'ignore' });
         execSync(`cd "${repoPath}" && git commit -m "IA modification: ${modInfo.question}"`, { stdio: 'ignore' });
 
-        if (isMajorChange) {
+        if (insertion.isMajorChange) {
           // Major change - keep branch for review, push branch only
           try {
             const pushCmd = getGitPushCommand(branchName);
@@ -2685,7 +2725,7 @@ async function applyCodeModification(message, modInfo) {
           }
         }
         
-        console.log(`✅ Code modification applied: ${modInfo.question} (Major: ${isMajorChange})`);
+        console.log(`✅ Code modification applied: ${insertion.question} (Major: ${insertion.isMajorChange})`);
       } else {
         await message.channel.send('✅ Code appliqué!\n⏰ Le changement sera effectif au prochain redémarrage automatique de Railway (généralement chaque jour).');
       }
@@ -2978,6 +3018,30 @@ client.on('messageCreate', async (message) => {
 
   if (isAssistantContext) {
     const isCreator = message.author.id === config.creatorId;
+    
+    // Priority 0: Handle pending code insertions (must approve preview)
+    const pendingInsertions = global.pendingInsertions || new Map();
+    if (isCreator && pendingInsertions.size > 0) {
+      const lastInsertion = Array.from(pendingInsertions.values()).pop();
+      const lastInsertionKey = Array.from(pendingInsertions.keys()).pop();
+      
+      if (lastInsertion && lastInsertion.userId === message.author.id) {
+        const isApproving = /^(oui|ok|yes|applique|parfait|c'est bon|vas-y|go|👍)$/i.test(message.content.trim());
+        const isRejecting = /^(non|nope|cancel|annule)$/i.test(message.content.trim());
+        
+        if (isApproving) {
+          await applyApprovedInsertion(message, lastInsertion);
+          pendingInsertions.delete(lastInsertionKey);
+          return;
+        }
+        
+        if (isRejecting) {
+          await message.channel.send('❌ Insertion annulée.');
+          pendingInsertions.delete(lastInsertionKey);
+          return;
+        }
+      }
+    }
     
     // Priority 1: Handle pending code modification confirmations (creator only)
     if (isCreator && pendingCodeMods.size > 0) {
@@ -3392,4 +3456,3 @@ client.on('interactionCreate', async (interaction) => {
 
 await initializeDatabase();
 client.login(config.token);
-//
