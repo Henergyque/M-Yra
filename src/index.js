@@ -2614,10 +2614,21 @@ async function applyCodeModification(message, modInfo) {
     // Detect if this is a major change
     const isMajorChange = detectMajorChange(modInfo.question, codeToAdd);
 
-    // Try to safely append the code before the last client event listeners
-    // Find a good insertion point (before last function)
-    const lastFunctionMatch = currentCode.lastIndexOf('function ');
-    const insertPosition = lastFunctionMatch > 0 ? lastFunctionMatch : currentCode.length - 100;
+    // Find best insertion point:
+    // 1. Look for "// Mute action" or last async function definition (safe spot)
+    // 2. If that fails, insert before the last 3 lines (usually client.login())
+    let insertPosition;
+    
+    // Try to find a good anchor point (look for last async function)
+    const lastAsyncMatch = currentCode.lastIndexOf('async function ');
+    if (lastAsyncMatch > 0) {
+      // Find the closing brace of this function
+      const afterFunc = currentCode.indexOf('\n}\n', lastAsyncMatch);
+      insertPosition = afterFunc > 0 ? afterFunc + 3 : currentCode.length - 500;
+    } else {
+      // Fallback: insert before last 500 chars (before client.login)
+      insertPosition = currentCode.length - 500;
+    }
 
     const updatedCode = currentCode.slice(0, insertPosition) + '\n\n' + codeToAdd + '\n\n' + currentCode.slice(insertPosition);
 
