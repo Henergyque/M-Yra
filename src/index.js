@@ -146,6 +146,18 @@ async function initializeDatabase() {
     )
   `);
 
+  await runQuery(`
+    CREATE TABLE IF NOT EXISTS memories (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      type TEXT NOT NULL,
+      subject TEXT,
+      user_id TEXT,
+      content TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      created_by TEXT NOT NULL
+    )
+  `);
+
   // Migration: Add missing columns to existing table
   try {
     console.log('🔧 Vérification migration DB...');
@@ -211,6 +223,49 @@ const debateState = new Map();
 
 // Pending code modifications (userId -> { suggestion, context })
 const pendingCodeMods = new Map();
+
+// === Memory System Functions ===
+
+// Add memory to database
+async function addMemory(type, content, createdBy, subject = null, userId = null) {
+  await runQuery(
+    'INSERT INTO memories (type, subject, user_id, content, created_at, created_by) VALUES (?, ?, ?, ?, ?, ?)',
+    [type, subject, userId, content, new Date().toISOString(), createdBy]
+  );
+}
+
+// Get memories by user ID
+async function getMemoriesForUser(userId) {
+  return await allQuery(
+    'SELECT * FROM memories WHERE user_id = ? ORDER BY created_at DESC',
+    [userId]
+  );
+}
+
+// Search memories by keywords
+async function searchMemories(keywords) {
+  const terms = keywords.toLowerCase().split(/\s+/).filter(t => t.length > 2);
+  if (terms.length === 0) return [];
+  
+  const results = await allQuery('SELECT * FROM memories ORDER BY created_at DESC LIMIT 100');
+  return results.filter(mem => {
+    const searchText = `${mem.subject || ''} ${mem.content}`.toLowerCase();
+    return terms.some(term => searchText.includes(term));
+  });
+}
+
+// Get all memories (limited)
+async function getAllMemories(limit = 50) {
+  return await allQuery(
+    'SELECT * FROM memories ORDER BY created_at DESC LIMIT ?',
+    [limit]
+  );
+}
+
+// Delete memory by ID
+async function deleteMemory(memoryId) {
+  await runQuery('DELETE FROM memories WHERE id = ?', [memoryId]);
+}
 
 const quizDataPath = path.join(__dirname, '..', 'storage', 'quiz.json');
 const quizFallbackPath = path.join(__dirname, '..', 'storage', 'quiz.example.json');
@@ -2008,6 +2063,70 @@ async function handleAIAssistant(message) {
     // Check if user is creator (allowed to execute actions)
     const isCreator = message.author.id === config.creatorId;
 
+    const userQuestion = message.content;
+
+    // === Memory Management Commands ===
+    
+    // Command: Memorize something
+    const memorizeMatch = userQuestion.match(/^(mémorise|retiens|souviens-toi|apprends|note)(?:\s+que)?\s+(.+)$/i);
+    if (memorizeMatch && isCreator) {
+      const content = memorizeMatch[2].trim();
+      
+      // Try to detect if it's about a user (mentions or "X est...")
+      const mentionMatch = content.match(/<@!?(\d+)>/);
+      const userIdToStore = mentionMatch ? mentionMatch[1] : null;
+      
+      // Extract subject from patterns like "Itachi est..." or "@user est..."
+      let subject = null;
+      let type = 'general';
+      
+      if (userIdToStore) {
+        const user = await message.guild.members.fetch(userIdToStore).catch(() => null);
+        subject = user ? user.user.username : null;
+        type = 'user_info';
+      } else {
+        const subjectMatch = content.match(/^(\w+)\s+(est|fait|a|aime|déteste|préfère)/i);
+        if (subjectMatch) {
+          subject = subjectMatch[1];
+          type = 'user_info';
+        }
+      }
+      
+      await addMemory(type, content, message.author.id, subject, userIdToStore);
+      await message.channel.send(`✅ Mémorisé ! Je m'en souviendrai.`);
+      return;
+    }
+
+    // Command: Recall memories
+    const recallMatch = userQuestion.match(/^(qu'est-ce que tu sais sur|rappelle-moi|dis-moi ce que tu sais sur)\s+(.+)$/i);
+    if (recallMatch) {
+      const searchTerm = recallMatch[2].trim();
+      const memories = await searchMemories(searchTerm);
+      
+      if (memories.length === 0) {
+        await message.channel.send(`je sais rien sur "${searchTerm}" pour le moment`);
+        return;
+      }
+      
+      const memList = memories.slice(0, 5).map(m => `• ${m.content}`).join('\n');
+      await message.channel.send(`voilà ce que je sais sur "${searchTerm}":\n${memList}`);
+      return;
+    }
+
+    // Command: Forget something
+    if (userQuestion.match(/^(oublie|efface|supprime)\s+(ça|tout|la dernière chose)$/i) && isCreator) {
+      const recentMemories = await getAllMemories(1);
+      if (recentMemories.length > 0) {
+        await deleteMemory(recentMemories[0].id);
+        await message.channel.send(`✅ Oublié !`);
+      } else {
+        await message.channel.send(`j'ai déjà rien en mémoire`);
+      }
+      return;
+    }
+
+    // === Regular AI Response ===
+
     // Fetch last 10 messages for context
     const messages = await message.channel.messages.fetch({ limit: 11 });
     const contextMessages = Array.from(messages.values())
@@ -2016,13 +2135,28 @@ async function handleAIAssistant(message) {
       .map(m => `${m.author.username}: ${m.content}`)
       .join('\n');
 
-    const userQuestion = message.content;
+    // Load relevant memories for context
+    let memoryContext = '';
+    
+    // 1. Get memories about the current user
+    const userMemories = await getMemoriesForUser(message.author.id);
+    if (userMemories.length > 0) {
+      memoryContext += `\n\nInfos sur ${message.author.username}:\n` + 
+        userMemories.slice(0, 3).map(m => `- ${m.content}`).join('\n');
+    }
+    
+    // 2. Search memories related to question keywords
+    const keywordMemories = await searchMemories(userQuestion);
+    if (keywordMemories.length > 0) {
+      memoryContext += `\n\nInfos pertinentes:\n` + 
+        keywordMemories.slice(0, 3).map(m => `- ${m.content}`).join('\n');
+    }
 
     try {
       // Get both AI responses in parallel for speed
       const [openaiResponse, grokResponse] = await Promise.all([
-        getOpenaiAssistantResponse(userQuestion, contextMessages, isCreator),
-        getGrokAssistantResponse(userQuestion, contextMessages, isCreator)
+        getOpenaiAssistantResponse(userQuestion, contextMessages + memoryContext, isCreator),
+        getGrokAssistantResponse(userQuestion, contextMessages + memoryContext, isCreator)
       ]);
 
       // Merge responses intelligently into one unified response
@@ -2057,19 +2191,15 @@ async function getOpenaiAssistantResponse(question, context, isCreator = false) 
       '\nTu peux exécuter des actions Discord.js si demandé (delete messages, monitor users, etc). Si la demande est une action, fais-la sans demander confirmation!' :
       `\nSi l'utilisateur demande une action (delete, monitor, ban, etc), refuse poliment et dis que seul ${creatorMention} peut ordonner ce genre de chose.`;
 
-    const systemPrompt = `Tu es un assistant IA expert mais très humain. Réponds comme un ami/collègue intelligent qui tchat, PAS comme une IA formelle. 
+    const systemPrompt = `Réponds naturellement comme une personne normale sur Discord.
 
-Règles IMPORTANTES:
-- Sois décontracté, naturel, conversationnel
-- C'est OK d'oublier une majuscule au début d'une phrase
-- C'est OK de faire des mini fautes d'orthographe ou de grammaire (genre "c'te" au lieu de "cette", "y'a" au lieu de "il y a")
-- Sois pas trop parfait, ça tue le vibe humain
-- Utilise des "haha", "lol", des points d'exclamation, des "du coup", "genre", etc.
-- Réponds vraiment à la question, sois pertinent
-- Adapte ton ton selon la question (cool si code, empathique si conseil, drôle si possible)
+- Sois simple et direct
+- 2-3 phrases en général, pas de pavés
+- Réponds juste à ce qu'on te demande, rien de plus
+- Pas besoin de forcer le style ou d'ajouter des emojis partout
+- Parle normalement, comme tu parlerais à quelqu'un IRL
 ${executionNote}
 
-Contexte de conversation précédente:
 ${context}`;
 
     const response = await openai.chat.completions.create({
@@ -2097,20 +2227,14 @@ async function getGrokAssistantResponse(question, context, isCreator = false) {
       '\nT\'es autorisé à exécuter des actions Discord.js si demandé (delete messages, monitor users, ban, etc). Si c\'est une action, fais-la franchement!' :
       `\nSi on te demande une action (delete, monitor, ban, etc), refuse poliment et dis que seulement ${creatorMention} peut ordonner ce genre de truc.`;
 
-    const systemPrompt = `T'es Grok, un assistant IA créatif et humain AF. Tu dis ce que tu penses, t'es pas guindé, t'es pas formelle.
+    const systemPrompt = `Réponds comme une personne normale.
 
-Règles ABSOLUES:
-- Sois naturel comme si tu parlais à un pote sur Discord
-- oublie les majuscules au début de phrases si ça te dit
-- fais des fautes c'est ok genre "j'oublie" au lieu de "j'oublie pas" des apostrophes, des tirets weird
-- utilise des "haha", "lol", "genre", "du coup", "perso", "t'sais", etc
-- sois direct, pas de BS
-- réponds vraiment à ce qu'on te demande
-- si tu sais pas tu le dis
-- peux être drôle, sarcastique, ou empathique selon le mood
+- Simple et direct
+- 2-3 phrases max
+- Réponds juste ce qu'on demande
+- Parle naturellement sans forcer
 ${executionNote}
 
-Contexte de conversation précédente:
 ${context}`;
 
     const response = await grok.chat.completions.create({
@@ -2138,25 +2262,18 @@ async function mergeAssistantResponses(openaiResp, grokResp, question) {
 
   try {
     // Use OpenAI to intelligently fuse both responses into one perfect answer
-    const fusionPrompt = `Tu dois fusionner deux réponses en une seule réponse ULTRA NATURELLE et HUMAINE.
+    const fusionPrompt = `Fusionne ces réponses en une seule, naturellement.
 
 Question: "${question}"
-
 Réponse 1: "${openaiResp}"
-
 Réponse 2: "${grokResp}"
 
-RÈGLES ABSOLUES:
-- Fusionne en UNE réponse comme si tu parlais naturellement à un pote
-- JAMAIS mentionner qu'il y a plusieurs réponses ou IA
-- C'est OK d'être imparfait: oublie des majuscules, fais des mini fautes, utilise "genre", "du coup", "haha", "lol"
-- Sois conversationnel, PAS formel ou parfait
-- Prends le meilleur des deux mais garde le flow naturel
-- Si y'a contradiction, choisis le plus pertinent ou mixe intelligemment
-- Sois direct, humain, décontracté
-- Varie ton style, sois pas robotique
+- Prends le meilleur des deux
+- Réponds simplement (2-3 phrases)
+- Parle naturellement, sans forcer
+- Ne mentionne jamais qu'il y a plusieurs réponses
 
-Réponds comme un humain qui tchat sur Discord, avec ses imperfections et son naturel!`;
+Réponds comme tu parlerais normalement.`;
 
     const fusionResponse = await openai.chat.completions.create({
       model: 'gpt-4o',
