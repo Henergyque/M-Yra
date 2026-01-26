@@ -2664,14 +2664,27 @@ async function applyCodeModification(message, modInfo) {
 // Apply approved insertion (called after user says "oui")
 async function applyApprovedInsertion(message, insertion) {
   try {
-    // Basic validation: check balanced brackets
-    const openBraces = (insertion.updatedCode.match(/\{/g) || []).length;
-    const closeBraces = (insertion.updatedCode.match(/\}/g) || []).length;
-    const openParens = (insertion.updatedCode.match(/\(/g) || []).length;
-    const closeParens = (insertion.updatedCode.match(/\)/g) || []).length;
+    // Validate that original code was balanced
+    const origOpenBraces = (insertion.updatedCode.match(/\{/g) || []).length;
+    const origCloseBraces = (insertion.updatedCode.match(/\}/g) || []).length;
+    const origOpenParens = (insertion.updatedCode.match(/\(/g) || []).length;
+    const origCloseParens = (insertion.updatedCode.match(/\)/g) || []).length;
     
-    if (openBraces !== closeBraces || openParens !== closeParens) {
-      await message.channel.send(`❌ Accolades ou parenthèses déséquilibrées détectées.\n\`{ \` ouvertes: ${openBraces}, fermées: ${closeBraces}\n\`( \` ouvertes: ${openParens}, fermées: ${closeParens}\n\nInsertion annulée.`);
+    // Also validate original code to compare
+    const baseOpenBraces = (fs.readFileSync(insertion.filePath, 'utf-8').match(/\{/g) || []).length;
+    const baseCloseBraces = (fs.readFileSync(insertion.filePath, 'utf-8').match(/\}/g) || []).length;
+    const baseOpenParens = (fs.readFileSync(insertion.filePath, 'utf-8').match(/\(/g) || []).length;
+    const baseCloseParens = (fs.readFileSync(insertion.filePath, 'utf-8').match(/\)/g) || []).length;
+    
+    // Check if original is balanced
+    if (baseOpenBraces !== baseCloseBraces || baseOpenParens !== baseCloseParens) {
+      await message.channel.send(`⚠️ Le fichier d'origine n'est pas équilibré. Correction impossible.\nFichier: \`{ \`: ${baseOpenBraces}/${baseCloseBraces}, \`( \`: ${baseOpenParens}/${baseCloseParens}`);
+      return;
+    }
+    
+    // Check if insertion maintains balance
+    if (origOpenBraces !== origCloseBraces || origOpenParens !== origCloseParens) {
+      await message.channel.send(`❌ Le code modifié n'est pas équilibré.\nDifférence: \`{ \`: ${origOpenBraces - baseOpenBraces}/${origCloseBraces - baseCloseBraces}, \`( \`: ${origOpenParens - baseOpenParens}/${origCloseParens - baseCloseParens}\n\nInsertion annulée.`);
       return;
     }
 
