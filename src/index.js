@@ -3101,21 +3101,20 @@ async function handleAskCommand(interaction) {
     // Get current counting state to provide context
     const countingState = await getCountingState(interaction.channelId);
 
-    const systemPrompt = `Tu es une IA capable de modifier l'état du bot Discord.
+    const systemPrompt = `Tu es une IA qui modifie l'état du bot Discord.
 
 CONTEXTE ACTUEL:
-- Counting: dernièrement ${countingState.lastNumber} (dernier joueur: <@${countingState.lastUserId || 'unknown'}>)
+- Counting: dernier nombre = ${countingState.lastNumber}, dernier joueur = ${countingState.lastUserId || 'personne'}
 
-CAPACITÉS (réponds avec JSON dans une balise \`\`\`json):
-- "counting_reset": { "number": <int> } → Redémarrer le counting à ce nombre
-- "counting_set_last": { "number": <int>, "userId": <string|null> } → Définir le dernier nombre et joueur
-- Message normal: Juste répondre à la question
-
-Format réponse:
-1. Si modification d'état: \`\`\`json
-{ "action": "counting_reset", "number": 50 }
+INSTRUCTION CRUCIALE:
+Si la demande concerne le counting (reset, restart, redémarrer), TOUJOURS répondre UNIQUEMENT avec ce JSON (rien d'autre):
+\`\`\`json
+{"action":"counting_reset","number":NOMBRE}
 \`\`\`
-2. Sinon: Réponds normalement en markdown.`;
+
+Remplace NOMBRE par le chiffre demandé (ex: 10, 50, 100, etc).
+
+Si la demande est autre, réponds normalement en texte.`;
 
     const response = await openai.chat.completions.create({
       model: 'gpt-4o-mini',
@@ -3123,19 +3122,21 @@ Format réponse:
         { role: 'system', content: systemPrompt },
         { role: 'user', content: question }
       ],
-      max_tokens: 1000,
-      temperature: 0.7
+      max_tokens: 500,
+      temperature: 0
     });
 
     const content = response.choices[0].message.content.trim();
+    console.log('🔍 /ask raw response:', content);
 
     // Try to parse JSON action
-    const jsonMatch = content.match(/```json\n?([\s\S]*?)\n?```/);
+    const jsonMatch = content.match(/```json\s*({[\s\S]*?})\s*```/);
     let actionResult = null;
 
     if (jsonMatch) {
       try {
         const action = JSON.parse(jsonMatch[1]);
+        console.log('✅ Parsed action:', action);
         
         if (action.action === 'counting_reset' && typeof action.number === 'number') {
           await setCountingState(interaction.channelId, action.number, null);
@@ -3145,15 +3146,17 @@ Format réponse:
           actionResult = `✅ Counting défini: ${action.number} (joueur: ${action.userId ? `<@${action.userId}>` : 'none'})`;
         }
       } catch (parseErr) {
-        // JSON parsing failed, treat as normal response
+        console.error('❌ JSON parse failed:', parseErr.message, 'JSON string was:', jsonMatch[1]);
       }
+    } else {
+      console.log('⚠️ No JSON block found in response');
     }
 
     // Extract text (remove JSON block if present)
     const textResponse = content.replace(/```json[\s\S]*?```/g, '').trim();
     
     const responseText = [
-      textResponse || '✅ Modification appliquée',
+      textResponse || (actionResult ? '' : '✅ Modifié'),
       actionResult || null
     ].filter(Boolean).join('\n\n');
 
