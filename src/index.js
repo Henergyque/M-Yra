@@ -215,6 +215,12 @@ const grok = new OpenAI({
   baseURL: 'https://api.x.ai/v1'
 });
 
+// Claude client for assistant (more natural/human tone)
+const Anthropic = await import('@anthropic-ai/sdk');
+const claude = new Anthropic.default({
+  apiKey: config.claudeApiKey
+});
+
 // Story game state
 const activeStories = new Map();
 
@@ -2154,49 +2160,73 @@ async function handleAIAssistant(message) {
 
     // === Execute Actions First (if creator) ===
     if (isCreator) {
-      // Check if this is a direct action command with full details
-      const deleteMatch = userQuestion.match(/supprime?\s+(?:les?\s+)?(\d+)\s+(?:derniers?\s+)?messages?/i);
+      // Quick direct patterns for common cases
       const deleteAllMatch = userQuestion.match(/supprime?\s+(tous?|tout|all)\s+(les?\s+)?messages?/i);
+      const deleteNumMatch = userQuestion.match(/supprime?\s+(?:les?\s+)?(\d+)\s+(?:derniers?\s+)?messages?/i);
       
       if (deleteAllMatch) {
-        await bulkDeleteMessages(message, 100); // Max Discord permet
+        await bulkDeleteMessages(message, 100);
         await message.channel.send('voilà j\'ai tout viré');
         return;
       }
       
-      if (deleteMatch) {
-        const count = parseInt(deleteMatch[1]);
+      if (deleteNumMatch) {
+        const count = parseInt(deleteNumMatch[1]);
         await bulkDeleteMessages(message, count);
-        return; // Action executed, skip AI response
+        return;
       }
-
-      // Try other direct actions (ban with mention, etc)
-      const actionExecuted = await tryExecuteAssistantAction(userQuestion, message);
-      if (actionExecuted) return; // Action executed, skip AI response
     }
 
-    // === Regular AI Response (if no action was executed) ===
+    // === Regular AI Response (let AI decide if action needed) ===
     try {
-      // Get both AI responses in parallel for speed
-      const [openaiResponse, grokResponse] = await Promise.all([
-        getOpenaiAssistantResponse(userQuestion, contextMessages + memoryContext, isCreator),
-        getGrokAssistantResponse(userQuestion, contextMessages + memoryContext, isCreator)
-      ]);
+      // Add code context if question is about bot features
+      let codeContext = '';
+      if (/comment|expliqu|fonctionn|marche|command|feature|c'est quoi|qu'est-ce|story|quiz|debate|counting|confession/i.test(userQuestion)) {
+        const currentCode = fs.readFileSync('./src/index.js', 'utf-8');
+        // Extract relevant sections based on question
+        const relevantSections = [];
+        if (/story|histoire/i.test(userQuestion)) {
+          const storyMatch = currentCode.match(/\/\/ Handle \.story[\s\S]{0,500}/);
+          if (storyMatch) relevantSections.push(storyMatch[0]);
+        }
+        if (/quiz/i.test(userQuestion)) {
+          const quizMatch = currentCode.match(/async function handleQuizCommand[\s\S]{0,500}/);
+          if (quizMatch) relevantSections.push(quizMatch[0]);
+        }
+        if (relevantSections.length > 0) {
+          codeContext = `\n\nCode pertinent du bot:\n${relevantSections.join('\n...\n')}`;
+        }
+      }
 
-      // Merge responses intelligently into one unified response
-      const mergedResponse = await mergeAssistantResponses(openaiResponse, grokResponse, userQuestion);
+      // Get Claude response (single, natural AI)
+      const assistantResponse = await getClaudeAssistantResponse(userQuestion, contextMessages + memoryContext + codeContext, isCreator);
 
       // Check if AI wants to execute an action (for creator only)
       if (isCreator) {
-        const deleteAction = mergedResponse.match(/\[\[DELETE:(\d+)\]\]/);
-        const banAction = mergedResponse.match(/\[\[BAN:(<@!?(\d+)>|\d+)\]\]/);
-        const kickAction = mergedResponse.match(/\[\[KICK:(<@!?(\d+)>|\d+)\]\]/);
-        const muteAction = mergedResponse.match(/\[\[MUTE:(<@!?(\d+)>|\d+):(\d+)\]\]/);
-        const monitorAction = mergedResponse.match(/\[\[MONITOR:(<@!?(\d+)>|\d+)\]\]/);
+        // Code generation/modification
+        if (assistantResponse.includes('[[CODE_MODIFY]]')) {
+          const cleanResponse = assistantResponse.replace(/\[\[CODE_MODIFY\]\]/, '').trim();
+          if (cleanResponse) await message.channel.send(cleanResponse);
+          await executeSelfModification(userQuestion, message);
+          return;
+        }
+        if (assistantResponse.includes('[[CODE_GEN]]')) {
+          const cleanResponse = assistantResponse.replace(/\[\[CODE_GEN\]\]/, '').trim();
+          if (cleanResponse) await message.channel.send(cleanResponse);
+          await executeCodeGeneration(userQuestion, message);
+          return;
+        }
+
+        // Discord actions
+        const deleteAction = assistantResponse.match(/\[\[DELETE:(\d+)\]\]/);
+        const banAction = assistantResponse.match(/\[\[BAN:(<@!?(\d+)>|\d+)\]\]/);
+        const kickAction = assistantResponse.match(/\[\[KICK:(<@!?(\d+)>|\d+)\]\]/);
+        const muteAction = assistantResponse.match(/\[\[MUTE:(<@!?(\d+)>|\d+):(\d+)\]\]/);
+        const monitorAction = assistantResponse.match(/\[\[MONITOR:(<@!?(\d+)>|\d+)\]\]/);
 
         if (deleteAction) {
           const count = parseInt(deleteAction[1]);
-          const cleanResponse = mergedResponse.replace(/\[\[DELETE:\d+\]\]/, '').trim();
+          const cleanResponse = assistantResponse.replace(/\[\[DELETE:\d+\]\]/, '').trim();
           if (cleanResponse) await message.channel.send(cleanResponse);
           await bulkDeleteMessages(message, count);
           return;
@@ -2204,7 +2234,7 @@ async function handleAIAssistant(message) {
         if (banAction) {
           const userIdMatch = banAction[1].match(/\d+/);
           const userId = userIdMatch ? userIdMatch[0] : banAction[1];
-          const cleanResponse = mergedResponse.replace(/\[\[BAN:[^\]]+\]\]/, '').trim();
+          const cleanResponse = assistantResponse.replace(/\[\[BAN:[^\]]+\]\]/, '').trim();
           if (cleanResponse) await message.channel.send(cleanResponse);
           const member = await message.guild.members.fetch(userId).catch(() => null);
           if (member) {
@@ -2217,7 +2247,7 @@ async function handleAIAssistant(message) {
         if (kickAction) {
           const userIdMatch = kickAction[1].match(/\d+/);
           const userId = userIdMatch ? userIdMatch[0] : kickAction[1];
-          const cleanResponse = mergedResponse.replace(/\[\[KICK:[^\]]+\]\]/, '').trim();
+          const cleanResponse = assistantResponse.replace(/\[\[KICK:[^\]]+\]\]/, '').trim();
           if (cleanResponse) await message.channel.send(cleanResponse);
           const member = await message.guild.members.fetch(userId).catch(() => null);
           if (member) {
@@ -2231,7 +2261,7 @@ async function handleAIAssistant(message) {
           const userIdMatch = muteAction[1].match(/\d+/);
           const userId = userIdMatch ? userIdMatch[0] : muteAction[1];
           const duration = parseInt(muteAction[3]);
-          const cleanResponse = mergedResponse.replace(/\[\[MUTE:[^\]]+\]\]/, '').trim();
+          const cleanResponse = assistantResponse.replace(/\[\[MUTE:[^\]]+\]\]/, '').trim();
           if (cleanResponse) await message.channel.send(cleanResponse);
           const member = await message.guild.members.fetch(userId).catch(() => null);
           if (member) {
@@ -2253,7 +2283,7 @@ async function handleAIAssistant(message) {
       }
 
       // Split into chunks if needed (Discord 2000 char limit)
-      const chunks = mergedResponse.match(/[\s\S]{1,1900}/g) || [mergedResponse];
+      const chunks = assistantResponse.match(/[\s\S]{1,1900}/g) || [assistantResponse];
 
       for (const chunk of chunks) {
         await message.channel.send(chunk);
@@ -2267,7 +2297,40 @@ async function handleAIAssistant(message) {
   }
 }
 
-// Get OpenAI response for assistant
+// Get Claude response for assistant (natural, human tone)
+async function getClaudeAssistantResponse(question, context, isCreator = false) {
+  try {
+    const systemPrompt = `Réponds comme une personne normale sur Discord.
+
+- Court et direct (1-2 phrases max)
+- Pas de smileys forcés
+- Pas de questions inutiles à la fin
+
+${isCreator ? `Tu peux agir. Si on demande action:
+[[DELETE:X]] [[BAN:userId]] [[KICK:userId]] [[MUTE:userId:duration]] [[MONITOR:userId]] [[CODE_MODIFY]] [[CODE_GEN]]
+
+Si question sur features bot, utilise le code fourni.` : ''}`;
+
+    const response = await claude.messages.create({
+      model: 'claude-3-5-sonnet-20241022',
+      max_tokens: 1024,
+      system: systemPrompt,
+      messages: [
+        {
+          role: 'user',
+          content: `${context}\n\nUtilisateur: ${question}`
+        }
+      ]
+    });
+
+    return response.content[0].text;
+  } catch (error) {
+    console.error('❌ Erreur Claude assistant:', error);
+    return null;
+  }
+}
+
+// Get OpenAI response for assistant (kept for other features)
 async function getOpenaiAssistantResponse(question, context, isCreator = false) {
   try {
     const creatorMention = `<@${config.creatorId}>`;
@@ -2275,24 +2338,18 @@ async function getOpenaiAssistantResponse(question, context, isCreator = false) 
       '\nTu peux exécuter des actions Discord.js si demandé (delete messages, monitor users, etc). Si la demande est une action, fais-la sans demander confirmation!' :
       `\nSi l'utilisateur demande une action (delete, monitor, ban, etc), refuse poliment et dis que seul ${creatorMention} peut ordonner ce genre de chose.`;
 
-    const systemPrompt = `Réponds naturellement comme une personne normale sur Discord.
+    const systemPrompt = `T'es juste quelqu'un qui répond sur Discord. Parle normalement.
 
-- Sois simple et direct
-- 2-3 phrases en général, pas de pavés
-- Réponds juste à ce qu'on te demande, rien de plus
-- Pas besoin de forcer le style ou d'ajouter des emojis partout
-- Parle normalement, comme tu parlerais à quelqu'un IRL
+- Réponds court et simple
+- Pas de smileys forcés ou questions inutiles
+- Sois direct
 
-${isCreator ? `IMPORTANT: Tu peux exécuter des actions Discord. Si on te demande des actions (supprimer/bannir/mute/etc):
-- Si les détails manquent, DEMANDE des précisions naturellement ("combien?", "qui?", "combien de temps?", etc)
-- Si quelqu'un dit "tous les messages" ou "tout", utilise [[DELETE:100]] (la limite max)
-- Quand tu as toutes les infos nécessaires, termine ta réponse par UN SEUL de ces codes:
-  [[DELETE:X]] pour supprimer X messages (max 100)
-  [[BAN:userId]] pour bannir @userId
-  [[KICK:userId]] pour expulser @userId  
-  [[MUTE:userId:duration]] pour mute @userId pendant duration minutes
-  [[MONITOR:userId]] pour surveiller @userId
-Sois conversationnel et guide la personne.` : ''}
+${isCreator ? `Si on te demande d'agir:
+- Actions Discord: [[DELETE:X]] [[BAN:userId]] [[KICK:userId]] [[MUTE:userId:duration]] [[MONITOR:userId]]
+- Modifier bot: [[CODE_MODIFY]]
+- Code exemple: [[CODE_GEN]]
+
+Si question sur features bot, regarde le code dans le contexte.` : ''}
 
 ${context}`;
 
@@ -2321,18 +2378,13 @@ async function getGrokAssistantResponse(question, context, isCreator = false) {
       '\nT\'es autorisé à exécuter des actions Discord.js si demandé (delete messages, monitor users, ban, etc). Si c\'est une action, fais-la franchement!' :
       `\nSi on te demande une action (delete, monitor, ban, etc), refuse poliment et dis que seulement ${creatorMention} peut ordonner ce genre de truc.`;
 
-    const systemPrompt = `Réponds comme une personne normale.
+    const systemPrompt = `Réponds normal.
 
-- Simple et direct
-- 2-3 phrases max
-- Réponds juste ce qu'on demande
-- Parle naturellement sans forcer
+- Court et direct
+- Pas de smileys ou questions en trop
 
-${isCreator ? `Tu peux faire des actions Discord. Si on te demande d'agir:
-- Manque d'infos? Demande naturellement
-- Infos complètes? Termine par:
-  [[DELETE:X]] [[BAN:userId]] [[KICK:userId]] [[MUTE:userId:duration]] [[MONITOR:userId]]
-Sois chill et aide la personne.` : ''}
+${isCreator ? `Actions: [[DELETE:X]] [[BAN:userId]] [[KICK:userId]] [[MUTE:userId:duration]] [[MONITOR:userId]]
+Code: [[CODE_MODIFY]] [[CODE_GEN]]` : ''}
 
 ${context}`;
 
@@ -2361,18 +2413,21 @@ async function mergeAssistantResponses(openaiResp, grokResp, question) {
 
   try {
     // Use OpenAI to intelligently fuse both responses into one perfect answer
-    const fusionPrompt = `Fusionne ces réponses en une seule, naturellement.
+    const fusionPrompt = `Fusionne ces réponses simplement.
 
 Question: "${question}"
-Réponse 1: "${openaiResp}"
-Réponse 2: "${grokResp}"
+Réponse 1 (OpenAI): "${openaiResp}"
+Réponse 2 (Grok): "${grokResp}"
 
-- Prends le meilleur des deux
-- Réponds simplement (2-3 phrases)
-- Parle naturellement, sans forcer
-- Ne mentionne jamais qu'il y a plusieurs réponses
+IMPORTANT: Grok est plus naturel et humain. Privilégie son style et son ton.
+- Base-toi surtout sur Grok pour le ton et le style
+- Utilise OpenAI juste pour compléter les infos si nécessaire
+- Court (1-2 phrases)
+- Pas de smileys forcés
+- Pas de questions inutiles
+- Jamais mentionner qu'il y a plusieurs réponses
 
-Réponds comme tu parlerais normalement.`;
+Réponds comme Grok le ferait, naturel et direct.`;
 
     const fusionResponse = await openai.chat.completions.create({
       model: 'gpt-4o',
@@ -2396,8 +2451,8 @@ Réponds comme tu parlerais normalement.`;
 async function tryExecuteAssistantCodeGeneration(question, message) {
   try {
     // Check for code generation keywords
-    const isCodeGenRequest = /génère|genere|code|modifi|improve|fix|crée|cree|javascript|python|script|fonction|function/i.test(question);
-    const isSelfModifyRequest = /modifie.*ton code|modifie.*index|change.*le bot|ajoute.*feature|rajoute/i.test(question);
+    const isCodeGenRequest = /génère|genere|code|modifi|improve|fix|crée|cree|ajoute|rajoute|javascript|python|script|fonction|function|commande|command/i.test(question);
+    const isSelfModifyRequest = /modifie.*ton code|modifie.*index|change.*le bot|ajoute.*feature|rajoute|crée.*commande|ajoute.*commande|nouvelle.*commande/i.test(question);
 
     if (!isCodeGenRequest) return false; // Not a code request
 
