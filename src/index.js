@@ -958,6 +958,8 @@ async function handleStoryContribution(message) {
 async function handleRoastCommand(interaction) {
   try {
     const targetUser = interaction.options.getUser('cible');
+    const targetMember = await interaction.guild.members.fetch(targetUser.id);
+    const displayName = targetMember.displayName || targetUser.username;
 
     // Defer car Grok peut être lent
     await interaction.deferReply();
@@ -974,7 +976,7 @@ async function handleRoastCommand(interaction) {
           },
           {
             role: 'user',
-            content: `Insulte drôlement: ${targetUser.username}`
+            content: `Insulte drôlement: ${displayName}`
           }
         ],
         max_tokens: 200,
@@ -986,7 +988,7 @@ async function handleRoastCommand(interaction) {
       console.error('❌ Erreur Grok roast:', err.message);
     }
 
-    await interaction.editReply({ content: `🔥 **${targetUser.username}**: ${roast}` });
+    await interaction.editReply({ content: `🔥 ${targetUser}: ${roast}` });
   } catch (err) {
     console.error('❌ Erreur /roast:', err);
     try {
