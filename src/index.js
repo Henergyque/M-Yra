@@ -2664,11 +2664,14 @@ async function applyCodeModification(message, modInfo) {
 // Apply approved insertion (called after user says "oui")
 async function applyApprovedInsertion(message, insertion) {
   try {
-    // Validate syntax
-    try {
-      new Function(insertion.updatedCode);
-    } catch (syntaxError) {
-      await message.channel.send(`❌ Erreur de syntaxe détectée:\n\`\`\`\n${syntaxError.message}\n\`\`\`\n\nInsertion annulée.`);
+    // Basic validation: check balanced brackets
+    const openBraces = (insertion.updatedCode.match(/\{/g) || []).length;
+    const closeBraces = (insertion.updatedCode.match(/\}/g) || []).length;
+    const openParens = (insertion.updatedCode.match(/\(/g) || []).length;
+    const closeParens = (insertion.updatedCode.match(/\)/g) || []).length;
+    
+    if (openBraces !== closeBraces || openParens !== closeParens) {
+      await message.channel.send(`❌ Accolades ou parenthèses déséquilibrées détectées.\n\`{ \` ouvertes: ${openBraces}, fermées: ${closeBraces}\n\`( \` ouvertes: ${openParens}, fermées: ${closeParens}\n\nInsertion annulée.`);
       return;
     }
 
