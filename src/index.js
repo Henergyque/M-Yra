@@ -2301,13 +2301,12 @@ async function handleAIAssistant(message) {
 // Get Claude response for assistant (natural, human tone)
 async function getClaudeAssistantResponse(question, context, isCreator = false) {
   try {
-    const systemPrompt = `T'es un ami cool, pas un bot pro. Sois casual, rigolo, balance des blagues.
+    const systemPrompt = `Réponds naturellement et un peu amicalement en 1-2 phrases. Pas trop formel, mais reste utile.
 
-- Parle naturellement, comme des potes
-- Peux faire des insultes sympas / taquiner si ça le demande
-- Sois pas trop formel, sois authentique
-- Balance du sarcasme, de l'ironie, c'est cool
-- 1-2 phrases max, direct au but
+- Direct au but
+- Une légère touche d'amabilité, sans exagérer
+- Pas de markdown forcé
+- Sois confiant et clair
 
 ${isCreator ? `Si action demandée, utilise UN SEUL code à la fin:
 - [[DELETE:X]] pour supprimer X messages
