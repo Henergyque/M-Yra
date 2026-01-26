@@ -2536,31 +2536,37 @@ async function executeSelfModification(question, message) {
     // Get current code context
     const currentCode = fs.readFileSync('./src/index.js', 'utf-8');
 
-    const systemPrompt = `Tu modifies le bot Discord M-Yra pour: "${question}"
+    const systemPrompt = `Tu modifies le bot Discord M-Yra existant. Demande: "${question}"
 
-RÈGLE: Suggère UNIQUEMENT le code minimal nécessaire.
+CONTEXTE EXISTANT:
+- Bot discord.js v14 avec client, intents, toutes imports déjà faits
+- Slash commands déjà setup avec guild.commands.set()
+- Handler interactionCreate déjà présent
+- SQLite, OpenAI, Grok, Claude déjà configurés
 
-- Petite feature/commande simple → 5-20 lignes max (juste ce qu'il faut ajouter)
-- Grosse feature complexe → Code complet si vraiment nécessaire
+TON RÔLE: Suggère UNIQUEMENT les lignes minimales à ajouter/modifier.
+
+Exemples:
+- /hello → Juste la commande dans le tableau + le case dans le handler (10-15 lignes)
+- Feature complexe → Plus de code si vraiment nécessaire
 
 Format:
 \`\`\`javascript
-// FONCTION À AJOUTER OU MODIFIER:
-[code minimal]
+// LIGNES À AJOUTER/MODIFIER:
+[code minimal sans réimporter ou recréer ce qui existe]
 \`\`\`
 
-PAS DE:
-- Imports déjà faits
-- client.login() 
-- Code déjà existant
-
-CONTEXTE: Bot discord.js v14 avec SQLite, OpenAI, Grok, Claude déjà setup.`;
+INTERDICTIONS:
+- Ne recrée JAMAIS les imports (déjà faits)
+- Ne recrée JAMAIS le client (existe déjà)
+- Ne recrée JAMAIS REST/Routes (pas besoin, guild.commands.set() suffit)
+- Ne montre PAS de code déjà existant`;
 
     const modResponse = await openai.chat.completions.create({
       model: 'gpt-4o',
       messages: [
         { role: 'system', content: systemPrompt },
-        { role: 'user', content: `Code actuel (extrait):\n${currentCode.substring(0, 2000)}\n\nDemande: ${question}` }
+        { role: 'user', content: `Code actuel (extrait):\n${currentCode.substring(3000, 5000)}\n\nDemande: ${question}` }
       ],
       max_tokens: 2500,
       temperature: 0.7
