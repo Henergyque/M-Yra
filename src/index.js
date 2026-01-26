@@ -3085,6 +3085,84 @@ async function executeMuteAction(message, question) {
   }
 }
 
+// /ask command handler - creator-only memory/state modification
+async function handleAskCommand(interaction) {
+  // Creator only
+  if (interaction.user.id !== config.creatorId) {
+    await interaction.reply({ content: '❌ Réservé au créateur.', ephemeral: true });
+    return;
+  }
+
+  const question = interaction.options.getString('question');
+  
+  try {
+    await interaction.deferReply();
+
+    // Get current counting state to provide context
+    const countingState = await getCountingState(interaction.channelId);
+
+    const systemPrompt = `Tu es une IA capable de modifier l'état du bot Discord.
+
+CONTEXTE ACTUEL:
+- Counting: dernièrement ${countingState.lastNumber} (dernier joueur: <@${countingState.lastUserId || 'unknown'}>)
+
+CAPACITÉS (réponds avec JSON dans une balise \`\`\`json):
+- "counting_reset": { "number": <int> } → Redémarrer le counting à ce nombre
+- "counting_set_last": { "number": <int>, "userId": <string|null> } → Définir le dernier nombre et joueur
+- Message normal: Juste répondre à la question
+
+Format réponse:
+1. Si modification d'état: \`\`\`json
+{ "action": "counting_reset", "number": 50 }
+\`\`\`
+2. Sinon: Réponds normalement en markdown.`;
+
+    const response = await openai.chat.completions.create({
+      model: 'gpt-4o-mini',
+      messages: [
+        { role: 'system', content: systemPrompt },
+        { role: 'user', content: question }
+      ],
+      max_tokens: 1000,
+      temperature: 0.7
+    });
+
+    const content = response.choices[0].message.content.trim();
+
+    // Try to parse JSON action
+    const jsonMatch = content.match(/```json\n?([\s\S]*?)\n?```/);
+    let actionResult = null;
+
+    if (jsonMatch) {
+      try {
+        const action = JSON.parse(jsonMatch[1]);
+        
+        if (action.action === 'counting_reset' && typeof action.number === 'number') {
+          await setCountingState(interaction.channelId, action.number, null);
+          actionResult = `✅ Counting redémarré à **${action.number}**`;
+        } else if (action.action === 'counting_set_last') {
+          await setCountingState(interaction.channelId, action.number, action.userId);
+          actionResult = `✅ Counting défini: ${action.number} (joueur: ${action.userId ? `<@${action.userId}>` : 'none'})`;
+        }
+      } catch (parseErr) {
+        // JSON parsing failed, treat as normal response
+      }
+    }
+
+    // Extract text (remove JSON block if present)
+    const textResponse = content.replace(/```json[\s\S]*?```/g, '').trim();
+    
+    const responseText = [
+      textResponse || '✅ Modification appliquée',
+      actionResult || null
+    ].filter(Boolean).join('\n\n');
+
+    await interaction.editReply(responseText || '✅ Ok!');
+  } catch (error) {
+    console.error('❌ Erreur /ask:', error);
+    await interaction.editReply(`❌ Erreur: ${error.message}`);
+  }
+}
 
 
 client.on('messageCreate', async (message) => {
@@ -3346,6 +3424,18 @@ client.once('ready', async () => {
           )
       );
 
+      // Ajouter la commande /ask (creator only)
+      commands.push(
+        new SlashCommandBuilder()
+          .setName('ask')
+          .setDescription('❓ Demande à l\'IA de modifier la mémoire du bot (creator only)')
+          .addStringOption(opt =>
+            opt.setName('question')
+              .setDescription('Demande à l\'IA (ex: redémarre le counting à 10)')
+              .setRequired(true)
+          )
+      );
+
       await guild.commands.set(commands);
       console.log('✅ Slash commands enregistrées');
     }
@@ -3392,6 +3482,11 @@ client.on('interactionCreate', async (interaction) => {
 
       if (commandName === 'debate-respond-openai') {
         await handleDebateRespondOpenaiCommand(interaction);
+        return;
+      }
+
+      if (commandName === 'ask') {
+        await handleAskCommand(interaction);
         return;
       }
 
