@@ -2979,8 +2979,23 @@ client.on('messageCreate', async (message) => {
     }
 
     if (isRejecting && message.author.id === config.creatorId && pendingCodeMods.size > 0) {
-      pendingCodeMods.clear(); // Clear pending modifications
-      await message.channel.send('ok j\'ai annulé. dis-moi ce que tu veux que je change!');
+      const lastMod = Array.from(pendingCodeMods.values()).pop();
+      const lastModKey = Array.from(pendingCodeMods.keys()).pop();
+      
+      // Extract feedback from message (everything after "non")
+      const feedback = message.content.replace(/^(non|nope|change|modifie|améliore)[,\s]*/i, '').trim();
+      
+      if (feedback && lastMod) {
+        // Regenerate with feedback
+        await message.channel.send('⏳ je corrige ça...');
+        pendingCodeMods.delete(lastModKey);
+        const newQuestion = `${lastMod.question} (CORRECTION: ${feedback})`;
+        await executeSelfModification(newQuestion, message);
+      } else {
+        // Just cancel
+        pendingCodeMods.clear();
+        await message.channel.send('ok j\'ai annulé. dis-moi ce que tu veux que je change!');
+      }
       return;
     }
 
