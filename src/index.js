@@ -3236,8 +3236,15 @@ client.once('ready', async () => {
 
   // Register slash commands
   try {
-    const guild = client.guilds.cache.first();
-    if (guild) {
+    const guild = config.guildId
+      ? (client.guilds.cache.get(config.guildId) || await client.guilds.fetch(config.guildId).catch(() => null))
+      : client.guilds.cache.first();
+
+    if (!guild) {
+      console.warn('⚠️ Impossible de trouver une guild pour enregistrer les commandes');
+      return;
+    }
+
       const commands = [
         new SlashCommandBuilder()
           .setName('ping')
