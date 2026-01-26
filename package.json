@@ -8,6 +8,7 @@
     "start": "node src/index.js"
   },
   "dependencies": {
+    "@babel/parser": "^7.26.3",
     "@anthropic-ai/sdk": "^0.71.2",
     "discord.js": "^14.15.3",
     "openai": "^4.77.0",

@@ -3,6 +3,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import sqlite3 from 'sqlite3';
 import OpenAI from 'openai';
+import { parse } from '@babel/parser';
 import { execSync } from 'node:child_process';
 import {
   ActionRowBuilder,
@@ -2661,35 +2662,104 @@ async function applyCodeModification(message, modInfo) {
   }
 }
 
+// Try to parse code using Babel to catch syntax errors before writing
+function tryParseWithBabel(code) {
+  try {
+    parse(code, {
+      sourceType: 'module',
+      plugins: [
+        'classProperties',
+        'classPrivateProperties',
+        'classPrivateMethods',
+        'decorators-legacy',
+        'dynamicImport',
+        'importMeta',
+        'jsx',
+        'topLevelAwait',
+        'optionalChaining',
+        'nullishCoalescingOperator',
+        'numericSeparator',
+        'objectRestSpread'
+      ]
+    });
+    return { ok: true };
+  } catch (error) {
+    return { ok: false, error };
+  }
+}
+
+// Ask the model for a minimal syntax-only fix when parsing fails
+async function autoFixSyntaxWithModel(updatedCode, parseError) {
+  try {
+    const locationHint = parseError?.loc ? `line ${parseError.loc.line}, column ${parseError.loc.column}` : 'unknown position';
+    const systemPrompt = 'You fix JavaScript syntax errors in full files. Keep logic unchanged, only repair syntax. Return ONLY the full corrected file content without explanation.';
+    const userPrompt = `The file fails to parse with error: ${parseError?.message || 'Unknown error'} at ${locationHint}.
+Please repair the syntax without altering behavior.
+
+File content:
+\`\`\`javascript
+${updatedCode}
+\`\`\``;
+
+    const response = await openai.chat.completions.create({
+      model: 'gpt-4o-mini',
+      messages: [
+        { role: 'system', content: systemPrompt },
+        { role: 'user', content: userPrompt }
+      ],
+      max_tokens: 8000,
+      temperature: 0
+    });
+
+    const suggestion = response.choices[0].message.content.trim();
+    const codeMatch = suggestion.match(/```(?:javascript|js)?\n?([\s\S]*?)```/);
+    const fixedCode = codeMatch ? codeMatch[1].trim() : suggestion;
+
+    return { ok: true, fixedCode };
+  } catch (error) {
+    console.warn('⚠️ Auto-fix failed:', error.message);
+    return { ok: false, error };
+  }
+}
+
 // Apply approved insertion (called after user says "oui")
 async function applyApprovedInsertion(message, insertion) {
   try {
-    // Validate that original code was balanced
-    const origOpenBraces = (insertion.updatedCode.match(/\{/g) || []).length;
-    const origCloseBraces = (insertion.updatedCode.match(/\}/g) || []).length;
-    const origOpenParens = (insertion.updatedCode.match(/\(/g) || []).length;
-    const origCloseParens = (insertion.updatedCode.match(/\)/g) || []).length;
-    
-    // Also validate original code to compare
-    const baseOpenBraces = (fs.readFileSync(insertion.filePath, 'utf-8').match(/\{/g) || []).length;
-    const baseCloseBraces = (fs.readFileSync(insertion.filePath, 'utf-8').match(/\}/g) || []).length;
-    const baseOpenParens = (fs.readFileSync(insertion.filePath, 'utf-8').match(/\(/g) || []).length;
-    const baseCloseParens = (fs.readFileSync(insertion.filePath, 'utf-8').match(/\)/g) || []).length;
-    
-    // Check if original is balanced
-    if (baseOpenBraces !== baseCloseBraces || baseOpenParens !== baseCloseParens) {
-      await message.channel.send(`⚠️ Le fichier d'origine n'est pas équilibré. Correction impossible.\nFichier: \`{ \`: ${baseOpenBraces}/${baseCloseBraces}, \`( \`: ${baseOpenParens}/${baseCloseParens}`);
-      return;
-    }
-    
-    // Check if insertion maintains balance
-    if (origOpenBraces !== origCloseBraces || origOpenParens !== origCloseParens) {
-      await message.channel.send(`❌ Le code modifié n'est pas équilibré.\nDifférence: \`{ \`: ${origOpenBraces - baseOpenBraces}/${origCloseBraces - baseCloseBraces}, \`( \`: ${origOpenParens - baseOpenParens}/${origCloseParens - baseCloseParens}\n\nInsertion annulée.`);
+    const baseCode = fs.readFileSync(insertion.filePath, 'utf-8');
+
+    // Validate existing file syntax before applying anything
+    const baseParse = tryParseWithBabel(baseCode);
+    if (!baseParse.ok) {
+      await message.channel.send(`⚠️ Le fichier actuel contient déjà une erreur de syntaxe (avant insertion). Merci de corriger manuellement.\n${baseParse.error.message}`);
       return;
     }
 
+    let updatedCode = insertion.updatedCode;
+    let parseResult = tryParseWithBabel(updatedCode);
+
+    // If parsing fails, try a model-assisted minimal syntax fix
+    if (!parseResult.ok) {
+      await message.channel.send(`⚠️ Le code proposé ne se parse pas (syntax error). Tentative d'auto-correction...\n${parseResult.error.message}`);
+      const fixAttempt = await autoFixSyntaxWithModel(updatedCode, parseResult.error);
+      if (!fixAttempt.ok || !fixAttempt.fixedCode) {
+        await message.channel.send('❌ Auto-correction impossible. Insertion annulée.');
+        return;
+      }
+
+      // Re-parse the fixed code
+      const secondParse = tryParseWithBabel(fixAttempt.fixedCode);
+      if (!secondParse.ok) {
+        await message.channel.send(`❌ Même après auto-fix, la syntaxe reste invalide: ${secondParse.error.message}`);
+        return;
+      }
+
+      updatedCode = fixAttempt.fixedCode;
+      parseResult = secondParse;
+      await message.channel.send('✅ Syntaxe corrigée automatiquement (gpt-4o-mini). Application en cours...');
+    }
+
     // Write the modified code
-    fs.writeFileSync(insertion.filePath, insertion.updatedCode, 'utf-8');
+    fs.writeFileSync(insertion.filePath, updatedCode, 'utf-8');
 
     // Try to create git branch and commit
     try {
@@ -2708,7 +2778,7 @@ async function applyApprovedInsertion(message, insertion) {
         
         // Add and commit changes
         execSync(`cd "${repoPath}" && git add src/index.js`, { stdio: 'ignore' });
-        execSync(`cd "${repoPath}" && git commit -m "IA modification: ${modInfo.question}"`, { stdio: 'ignore' });
+        execSync(`cd "${repoPath}" && git commit -m "IA modification: ${insertion.question}"`, { stdio: 'ignore' });
 
         if (insertion.isMajorChange) {
           // Major change - keep branch for review, push branch only
