@@ -2511,8 +2511,6 @@ JUSTE ce qu'il faut ajouter/modifier!`;
         { role: 'system', content: systemPrompt },
         { role: 'user', content: `Code actuel (extrait):\n${currentCode.substring(0, 2000)}\n\nDemande: ${question}` }
       ],
-        { role: 'user', content: question }
-      ],
       max_tokens: 2000,
       temperature: 0.7
     });
