@@ -3129,14 +3129,18 @@ Si la demande est autre, réponds normalement en texte.`;
     const content = response.choices[0].message.content.trim();
     console.log('🔍 /ask raw response:', content);
 
-    // Try to parse JSON action
-    const jsonMatch = content.match(/```json\s*({[\s\S]*?})\s*```/);
+    // Try to parse JSON action - look for raw JSON object {...}
     let actionResult = null;
-
-    if (jsonMatch) {
+    
+    // First try: look for JSON object directly
+    const jsonObjMatch = content.match(/\{[^{}]*"action"\s*:\s*"counting_reset"[^{}]*"number"\s*:\s*(\d+)[^{}]*\}/);
+    
+    if (jsonObjMatch) {
       try {
-        const action = JSON.parse(jsonMatch[1]);
-        console.log('✅ Parsed action:', action);
+        // Extract just the JSON part
+        const jsonStr = content.substring(content.indexOf('{'), content.lastIndexOf('}') + 1);
+        const action = JSON.parse(jsonStr);
+        console.log('✅ Parsed action from raw:', action);
         
         if (action.action === 'counting_reset' && typeof action.number === 'number') {
           await setCountingState(interaction.channelId, action.number, null);
@@ -3146,10 +3150,10 @@ Si la demande est autre, réponds normalement en texte.`;
           actionResult = `✅ Counting défini: ${action.number} (joueur: ${action.userId ? `<@${action.userId}>` : 'none'})`;
         }
       } catch (parseErr) {
-        console.error('❌ JSON parse failed:', parseErr.message, 'JSON string was:', jsonMatch[1]);
+        console.error('❌ JSON parse failed:', parseErr.message);
       }
     } else {
-      console.log('⚠️ No JSON block found in response');
+      console.log('⚠️ No JSON object found in response');
     }
 
     // Extract text (remove JSON block if present)
