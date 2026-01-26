@@ -2629,8 +2629,13 @@ client.on('messageCreate', async (message) => {
     return;
   }
 
-  // Handle AI Assistant in dedicated channel
-  if (config.assistantChannelId && message.channelId === config.assistantChannelId) {
+  // Handle AI Assistant in dedicated channel or its threads
+  const isAssistantContext = config.assistantChannelId && (
+    message.channelId === config.assistantChannelId ||
+    (message.channel.isThread && message.channel.parentId === config.assistantChannelId)
+  );
+
+  if (isAssistantContext) {
     // Check if this is a confirmation for pending code modification
     const isConfirming = /^(oui|ok|yes|applique|parfait|c'est bon|good|apply)$/i.test(message.content);
     const isRejecting = /^(non|nope|change|modifie|améliore)$/i.test(message.content);
