@@ -2681,6 +2681,12 @@ async function applyCodeModification(message, modInfo) {
       await message.channel.send('✅ Code appliqué! (Git commit échoué, mais fichier modifié)');
     }
 
+    // Auto-restart bot to apply changes
+    await message.channel.send('🔄 Redémarrage du bot pour appliquer les changements...');
+    setTimeout(() => {
+      process.exit(0); // Railway/Docker redémarrera automatiquement
+    }, 2000);
+
   } catch (error) {
     console.error('❌ Erreur application modification:', error);
     await message.channel.send(`❌ Erreur lors de l'application: ${error.message}`);
