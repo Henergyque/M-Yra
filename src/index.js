@@ -3098,23 +3098,25 @@ async function handleAskCommand(interaction) {
   try {
     await interaction.deferReply();
 
-    // Get current counting state to provide context
+    // Extract number from question if it's a counting reset request
+    const countingResetMatch = question.match(/(?:redémarre|restart|reset|reprendre).*?(?:à|at|to)?\s+(\d+)/i);
+    
+    if (countingResetMatch) {
+      const newNumber = parseInt(countingResetMatch[1], 10);
+      const targetChannelId = config.countingChannelId;
+      if (!targetChannelId) {
+        await interaction.editReply('❌ countingChannelId manquant dans config.json');
+        return;
+      }
+      await setCountingState(targetChannelId, newNumber, null);
+      await interaction.editReply(`✅ Counting du salon <#${targetChannelId}> redémarré à **${newNumber}**`);
+      return;
+    }
+
+    // For other requests, ask the model
     const countingState = await getCountingState(interaction.channelId);
 
-    const systemPrompt = `Tu es une IA qui modifie l'état du bot Discord.
-
-CONTEXTE ACTUEL:
-- Counting: dernier nombre = ${countingState.lastNumber}, dernier joueur = ${countingState.lastUserId || 'personne'}
-
-INSTRUCTION CRUCIALE:
-Si la demande concerne le counting (reset, restart, redémarrer), TOUJOURS répondre UNIQUEMENT avec ce JSON (rien d'autre):
-\`\`\`json
-{"action":"counting_reset","number":NOMBRE}
-\`\`\`
-
-Remplace NOMBRE par le chiffre demandé (ex: 10, 50, 100, etc).
-
-Si la demande est autre, réponds normalement en texte.`;
+    const systemPrompt = `Tu es une IA assistant un bot Discord. Réponds brièvement et naturellement en français.`;
 
     const response = await openai.chat.completions.create({
       model: 'gpt-4o-mini',
@@ -3122,49 +3124,12 @@ Si la demande est autre, réponds normalement en texte.`;
         { role: 'system', content: systemPrompt },
         { role: 'user', content: question }
       ],
-      max_tokens: 500,
-      temperature: 0
+      max_tokens: 300,
+      temperature: 0.7
     });
 
     const content = response.choices[0].message.content.trim();
-    console.log('🔍 /ask raw response:', content);
-
-    // Try to parse JSON action - look for raw JSON object {...}
-    let actionResult = null;
-    
-    // First try: look for JSON object directly
-    const jsonObjMatch = content.match(/\{[^{}]*"action"\s*:\s*"counting_reset"[^{}]*"number"\s*:\s*(\d+)[^{}]*\}/);
-    
-    if (jsonObjMatch) {
-      try {
-        // Extract just the JSON part
-        const jsonStr = content.substring(content.indexOf('{'), content.lastIndexOf('}') + 1);
-        const action = JSON.parse(jsonStr);
-        console.log('✅ Parsed action from raw:', action);
-        
-        if (action.action === 'counting_reset' && typeof action.number === 'number') {
-          await setCountingState(interaction.channelId, action.number, null);
-          actionResult = `✅ Counting redémarré à **${action.number}**`;
-        } else if (action.action === 'counting_set_last') {
-          await setCountingState(interaction.channelId, action.number, action.userId);
-          actionResult = `✅ Counting défini: ${action.number} (joueur: ${action.userId ? `<@${action.userId}>` : 'none'})`;
-        }
-      } catch (parseErr) {
-        console.error('❌ JSON parse failed:', parseErr.message);
-      }
-    } else {
-      console.log('⚠️ No JSON object found in response');
-    }
-
-    // Extract text (remove JSON block if present)
-    const textResponse = content.replace(/```json[\s\S]*?```/g, '').trim();
-    
-    const responseText = [
-      textResponse || (actionResult ? '' : '✅ Modifié'),
-      actionResult || null
-    ].filter(Boolean).join('\n\n');
-
-    await interaction.editReply(responseText || '✅ Ok!');
+    await interaction.editReply(content);
   } catch (error) {
     console.error('❌ Erreur /ask:', error);
     await interaction.editReply(`❌ Erreur: ${error.message}`);
