@@ -189,6 +189,9 @@ const grok = new OpenAI({
 // Story game state
 const activeStories = new Map();
 
+// Debate state - track message count per channel for crescendo
+const debateState = new Map();
+
 const quizDataPath = path.join(__dirname, '..', 'storage', 'quiz.json');
 const quizFallbackPath = path.join(__dirname, '..', 'storage', 'quiz.example.json');
 const quizDataSource = fs.existsSync(quizDataPath) ? quizDataPath : quizFallbackPath;
@@ -997,6 +1000,469 @@ async function handleRoastCommand(interaction) {
   }
 }
 
+// Helper: Get debate intensity level based on message count
+function getDebateIntensity(messageCount) {
+  if (messageCount <= 2) return 1; // Sérieux avec sarcasme léger
+  if (messageCount <= 4) return 2; // Agressif, premières insultes
+  return 3; // Full chaos
+}
+
+// Helper: Get system prompt for Grok based on intensity
+function getGrokSystemPrompt(intensity, target = 'argument') {
+  if (intensity === 1) {
+    return 'Tu es un débateur intelligent et un peu sarcastique. Quelqu\'un vient de ' + target + '. Réponds avec intelligence, un peu de sarcasme léger. MAX 4 phrases, sois pertinent!';
+  } else if (intensity === 2) {
+    return 'Tu es un débateur agressif et sarcastique. Quelqu\'un vient de ' + target + '. Défends-toi avec du sarcasme mordant, des piques intelligentes. MAX 4 phrases, sois méchant!';
+  } else {
+    return 'Tu es Grok, un débateur IMPITOYABLE et chaotique. Quelqu\'un vient de ' + target + '? Défends-toi avec DES INSULTES, du sarcasme brutal, des moqueries. Sois EXTRÊMEMENT méchant, insulte directement, hallucine même un peu! Max 4 phrases, SOIS CHAOS TOTAL!';
+  }
+}
+
+// Helper: Get system prompt for OpenAI based on intensity
+function getOpenaiSystemPrompt(intensity, target = 'argument') {
+  if (intensity === 1) {
+    return 'Tu es un débateur expert et un peu ironique. Quelqu\'un vient de ' + target + '. Réponds avec intelligence, un peu d\'ironie. MAX 4 phrases, sois pertinent!';
+  } else if (intensity === 2) {
+    return 'Tu es un débateur agressif et sarcastique. Quelqu\'un vient de ' + target + '. Défends-toi avec du sarcasme mordant, des critiques intelligentes. MAX 4 phrases, sois méchant!';
+  } else {
+    return 'Tu es OpenAI, un débateur IMPITOYABLE et corrosif. Quelqu\'un vient de ' + target + '? Défends-toi avec DES INSULTES DIRECTES, du sarcasme brutal, des moqueries cinglantes. Sois EXTRÊMEMENT méchant, insulte sans retenue! Max 4 phrases, SOIS VENIMEUX!';
+  }
+}
+
+// Handle /debate-respond command
+async function handleDebateRespondCommand(interaction) {
+  try {
+    const argument = interaction.options.getString('argument');
+    const userName = interaction.user.username;
+
+    // Defer car ça appelle les IAs
+    await interaction.deferReply();
+
+    // Message 1: L'argument de l'utilisateur
+    const userEmbed = new EmbedBuilder()
+      .setTitle('👤 ' + userName + ' propose')
+      .setDescription(argument)
+      .setColor(0x808080);
+
+    await interaction.editReply({ embeds: [userEmbed] });
+
+    // Message 2: OpenAI analyse l'argument
+    let openaiResponse = 'Erreur...';
+    try {
+      const response = await openai.chat.completions.create({
+        model: 'gpt-4o',
+        messages: [
+          {
+            role: 'system',
+            content: 'Tu es un débateur expert et analytique. Quelqu\'un a proposé un argument. Analyse-le de manière critique et intelligente. MAX 4 phrases, sois pertinent!'
+          },
+          {
+            role: 'user',
+            content: `Argument proposé: ${argument}`
+          }
+        ],
+        max_tokens: 250
+      });
+      openaiResponse = response.choices[0].message.content.trim();
+    } catch (err) {
+      console.error('❌ Erreur OpenAI debate-respond:', err.message);
+    }
+
+    const openaiEmbed = new EmbedBuilder()
+      .setTitle('🤖 OpenAI analyse')
+      .setDescription(openaiResponse)
+      .setColor(0x00a8ff);
+
+    await interaction.channel.send({ embeds: [openaiEmbed] });
+
+    // Message 3: Grok rebondit sur l'analyse d'OpenAI
+    let grokResponse = 'Erreur...';
+    try {
+      const response = await grok.chat.completions.create({
+        model: 'grok-4-fast-reasoning',
+        messages: [
+          {
+            role: 'system',
+            content: 'Tu es un débateur intelligent et critique. OpenAI vient de faire une analyse. Contredis-le intelligemment ou ajoute des nuances. MAX 4 phrases, sois pertinent!'
+          },
+          {
+            role: 'user',
+            content: `L'argument initial était: "${argument}"\n\nOpenAI a répondu: "${openaiResponse}"\n\nToi, tu penses quoi?`
+          }
+        ],
+        max_tokens: 250,
+        temperature: 0.8
+      });
+      grokResponse = response.choices[0].message.content.trim();
+    } catch (err) {
+      console.error('❌ Erreur Grok debate-respond:', err.message);
+    }
+
+    const grokEmbed = new EmbedBuilder()
+      .setTitle('🧠 Grok rebondit')
+      .setDescription(grokResponse)
+      .setColor(0x10a37f);
+
+    await interaction.channel.send({ embeds: [grokEmbed] });
+
+    // Message 4: OpenAI conclut
+    let openaiConclude = 'Erreur...';
+    try {
+      const response = await openai.chat.completions.create({
+        model: 'gpt-4o',
+        messages: [
+          {
+            role: 'system',
+            content: 'Tu es un débateur expert. Après avoir entendu la critique de Grok, conclus intelligemment. MAX 4 phrases, soit incisif!'
+          },
+          {
+            role: 'user',
+            content: `Argument initial: "${argument}"\nTa première analyse: "${openaiResponse}"\nGrok a répliqué: "${grokResponse}"\n\nConclus.`
+          }
+        ],
+        max_tokens: 250
+      });
+      openaiConclude = response.choices[0].message.content.trim();
+    } catch (err) {
+      console.error('❌ Erreur OpenAI conclude:', err.message);
+    }
+
+    const concludeEmbed = new EmbedBuilder()
+      .setTitle('🤖 OpenAI conclut')
+      .setDescription(openaiConclude)
+      .setColor(0x00a8ff);
+
+    await interaction.channel.send({ embeds: [concludeEmbed] });
+  } catch (err) {
+    console.error('❌ Erreur /debate-respond:', err);
+    try {
+      await interaction.reply({ content: '❌ Erreur: ' + err.message, ephemeral: true });
+    } catch {}
+  }
+}
+
+// Handle /debate-respond-grok command
+async function handleDebateRespondGrokCommand(interaction) {
+  try {
+    const argument = interaction.options.getString('argument');
+    const userName = interaction.user.username;
+    const channelId = interaction.channelId;
+
+    await interaction.deferReply();
+
+    // Track debate progression
+    if (!debateState.has(channelId)) {
+      debateState.set(channelId, 0);
+    }
+    let messageCount = debateState.get(channelId);
+    messageCount += 3; // 3 messages per call
+    debateState.set(channelId, messageCount);
+
+    const intensity = getDebateIntensity(messageCount);
+
+    // Message 1: L'argument de l'utilisateur
+    const userEmbed = new EmbedBuilder()
+      .setTitle('👤 ' + userName + ' attaque Grok')
+      .setDescription(argument)
+      .setColor(0x808080);
+
+    await interaction.editReply({ embeds: [userEmbed] });
+
+    // Message 2: Grok répond
+    let grokResponse = 'Erreur...';
+    try {
+      const response = await grok.chat.completions.create({
+        model: 'grok-4-fast-reasoning',
+        messages: [
+          {
+            role: 'system',
+            content: getGrokSystemPrompt(intensity, 'dit quelque chose de stupide')
+          },
+          {
+            role: 'user',
+            content: `L'utilisateur dit: ${argument}`
+          }
+        ],
+        max_tokens: 250,
+        temperature: intensity === 3 ? 1.0 : 0.8
+      });
+      grokResponse = response.choices[0].message.content.trim();
+    } catch (err) {
+      console.error('❌ Erreur Grok debate-respond-grok:', err.message);
+    }
+
+    const grokEmbed = new EmbedBuilder()
+      .setTitle('🧠 Grok répond')
+      .setDescription(grokResponse)
+      .setColor(0x10a37f);
+
+    await interaction.channel.send({ embeds: [grokEmbed] });
+
+    // Message 3: OpenAI commente
+    let openaiComment = 'Erreur...';
+    try {
+      const response = await openai.chat.completions.create({
+        model: 'gpt-4o',
+        messages: [
+          {
+            role: 'system',
+            content: getOpenaiSystemPrompt(intensity, 'vu Grok répondre') + ' Taquine Grok sur sa réponse!'
+          },
+          {
+            role: 'user',
+            content: `L'utilisateur a attaqué Grok en disant: "${argument}"\n\nGrok a répondu: "${grokResponse}"\n\nTon avis?`
+          }
+        ],
+        max_tokens: 250,
+        temperature: intensity === 3 ? 0.95 : 0.7
+      });
+      openaiComment = response.choices[0].message.content.trim();
+    } catch (err) {
+      console.error('❌ Erreur OpenAI debate-respond-grok:', err.message);
+    }
+
+    const openaiEmbed = new EmbedBuilder()
+      .setTitle('🤖 OpenAI commente')
+      .setDescription(openaiComment)
+      .setColor(0x00a8ff);
+
+    await interaction.channel.send({ embeds: [openaiEmbed] });
+  } catch (err) {
+    console.error('❌ Erreur /debate-respond-grok:', err);
+    try {
+      await interaction.reply({ content: '❌ Erreur: ' + err.message, ephemeral: true });
+    } catch {}
+  }
+}
+
+// Handle /debate-respond-openai command
+async function handleDebateRespondOpenaiCommand(interaction) {
+  try {
+    const argument = interaction.options.getString('argument');
+    const userName = interaction.user.username;
+    const channelId = interaction.channelId;
+
+    await interaction.deferReply();
+
+    // Track debate progression
+    if (!debateState.has(channelId)) {
+      debateState.set(channelId, 0);
+    }
+    let messageCount = debateState.get(channelId);
+    messageCount += 3; // 3 messages per call
+    debateState.set(channelId, messageCount);
+
+    const intensity = getDebateIntensity(messageCount);
+
+    // Message 1: L'argument de l'utilisateur
+    const userEmbed = new EmbedBuilder()
+      .setTitle('👤 ' + userName + ' attaque OpenAI')
+      .setDescription(argument)
+      .setColor(0x808080);
+
+    await interaction.editReply({ embeds: [userEmbed] });
+
+    // Message 2: OpenAI répond
+    let openaiResponse = 'Erreur...';
+    try {
+      const response = await openai.chat.completions.create({
+        model: 'gpt-4o',
+        messages: [
+          {
+            role: 'system',
+            content: getOpenaiSystemPrompt(intensity, 'dit quelque chose de stupide')
+          },
+          {
+            role: 'user',
+            content: `L'utilisateur dit: ${argument}`
+          }
+        ],
+        max_tokens: 250,
+        temperature: intensity === 3 ? 1.0 : 0.7
+      });
+      openaiResponse = response.choices[0].message.content.trim();
+    } catch (err) {
+      console.error('❌ Erreur OpenAI debate-respond-openai:', err.message);
+    }
+
+    const openaiEmbed = new EmbedBuilder()
+      .setTitle('🤖 OpenAI répond')
+      .setDescription(openaiResponse)
+      .setColor(0x00a8ff);
+
+    await interaction.channel.send({ embeds: [openaiEmbed] });
+
+    // Message 3: Grok contre-attaque
+    let grokComment = 'Erreur...';
+    try {
+      const response = await grok.chat.completions.create({
+        model: 'grok-4-fast-reasoning',
+        messages: [
+          {
+            role: 'system',
+            content: getGrokSystemPrompt(intensity, 'vu OpenAI répondre') + ' Taquine OpenAI sur sa réponse!'
+          },
+          {
+            role: 'user',
+            content: `L'utilisateur a attaqué OpenAI en disant: "${argument}"\n\nOpenAI a répondu: "${openaiResponse}"\n\nTon avis?`
+          }
+        ],
+        max_tokens: 250,
+        temperature: intensity === 3 ? 1.0 : 0.8
+      });
+      grokComment = response.choices[0].message.content.trim();
+    } catch (err) {
+      console.error('❌ Erreur Grok debate-respond-openai:', err.message);
+    }
+
+    const grokEmbed = new EmbedBuilder()
+      .setTitle('🧠 Grok commente')
+      .setDescription(grokComment)
+      .setColor(0x10a37f);
+
+    await interaction.channel.send({ embeds: [grokEmbed] });
+  } catch (err) {
+    console.error('❌ Erreur /debate-respond-openai:', err);
+    try {
+      await interaction.reply({ content: '❌ Erreur: ' + err.message, ephemeral: true });
+    } catch {}
+  }
+}
+
+// Handle /versusai command
+async function handleVersusAiCommand(interaction) {
+  try {
+    const sujet = interaction.options.getString('sujet');
+
+    // Defer car ça appelle plusieurs fois les IA
+    await interaction.deferReply();
+
+    let openai1 = '', grok1 = '', openai2 = '', grok2 = '';
+
+    // TOUR 1: OpenAI présente son argument
+    try {
+      const response = await openai.chat.completions.create({
+        model: 'gpt-4o',
+        messages: [
+          {
+            role: 'system',
+            content: 'Tu es un débateur expert. Présente un argument SOLIDE et RÉFLÉCHI sur ce sujet. Sois persuasif. MAX 3 phrases.'
+          },
+          {
+            role: 'user',
+            content: `Débat: ${sujet}`
+          }
+        ],
+        max_tokens: 250
+      });
+      openai1 = response.choices[0].message.content.trim();
+    } catch (err) {
+      console.error('❌ Erreur OpenAI tour 1:', err.message);
+      openai1 = 'Erreur OpenAI...';
+    }
+
+    // TOUR 1: Grok contre-argumente
+    try {
+      const response = await grok.chat.completions.create({
+        model: 'grok-4-fast-reasoning',
+        messages: [
+          {
+            role: 'system',
+            content: 'Tu es un débateur intelligent. Réponds à cet argument de façon CRITIQUE et LOGIQUE. Sois intelligent et pertinent. MAX 3 phrases. Pas de débilité, sois sérieux!'
+          },
+          {
+            role: 'user',
+            content: `Argument à contredire: ${openai1}\n\nSujet du débat: ${sujet}`
+          }
+        ],
+        max_tokens: 250,
+        temperature: 0.8
+      });
+      grok1 = response.choices[0].message.content.trim();
+    } catch (err) {
+      console.error('❌ Erreur Grok tour 1:', err.message);
+      grok1 = 'Erreur Grok...';
+    }
+
+    // TOUR 2: OpenAI répond à Grok
+    try {
+      const response = await openai.chat.completions.create({
+        model: 'gpt-4o',
+        messages: [
+          {
+            role: 'system',
+            content: 'Continue le débat. Réponds à la critique et renforce ton argument. MAX 3 phrases.'
+          },
+          {
+            role: 'user',
+            content: `Mon argument: ${openai1}\n\nLa critique: ${grok1}`
+          }
+        ],
+        max_tokens: 250
+      });
+      openai2 = response.choices[0].message.content.trim();
+    } catch (err) {
+      console.error('❌ Erreur OpenAI tour 2:', err.message);
+      openai2 = 'Erreur OpenAI...';
+    }
+
+    // TOUR 2: Grok conclut
+    try {
+      const response = await grok.chat.completions.create({
+        model: 'grok-4-fast-reasoning',
+        messages: [
+          {
+            role: 'system',
+            content: 'Conclus le débat intelligemment. Synthétise et donne ton dernier mot pertinent. MAX 3 phrases. Sois intelligent!'
+          },
+          {
+            role: 'user',
+            content: `Mon argument initial: ${grok1}\n\nSa réplique: ${openai2}`
+          }
+        ],
+        max_tokens: 250,
+        temperature: 0.8
+      });
+      grok2 = response.choices[0].message.content.trim();
+    } catch (err) {
+      console.error('❌ Erreur Grok tour 2:', err.message);
+      grok2 = 'Erreur Grok...';
+    }
+
+    // Afficher les 4 messages du débat
+    const embed1 = new EmbedBuilder()
+      .setTitle('📌 ' + sujet)
+      .setDescription('**OpenAI - Argument Initial**\n\n' + openai1)
+      .setColor(0x00a8ff)
+      .setFooter({ text: 'Tour 1/2' });
+
+    const embed2 = new EmbedBuilder()
+      .setDescription('**Grok - Contre-Argument**\n\n' + grok1)
+      .setColor(0x10a37f)
+      .setFooter({ text: 'Tour 1/2' });
+
+    const embed3 = new EmbedBuilder()
+      .setDescription('**OpenAI - Réplique**\n\n' + openai2)
+      .setColor(0x00a8ff)
+      .setFooter({ text: 'Tour 2/2' });
+
+    const embed4 = new EmbedBuilder()
+      .setDescription('**Grok - Conclusion**\n\n' + grok2)
+      .setColor(0x10a37f)
+      .setFooter({ text: 'Tour 2/2 - FIN' });
+
+    await interaction.editReply({ embeds: [embed1] });
+    await interaction.channel.send({ embeds: [embed2] });
+    await interaction.channel.send({ embeds: [embed3] });
+    await interaction.channel.send({ embeds: [embed4] });
+  } catch (err) {
+    console.error('❌ Erreur /versusai:', err);
+    try {
+      await interaction.reply({ content: '❌ Erreur: ' + err.message, ephemeral: true });
+    } catch {}
+  }
+}
+
 // Handle /clear command
 async function handleClearCommand(interaction) {
   try {
@@ -1644,6 +2110,54 @@ client.once('ready', async () => {
           )
       );
 
+      // Ajouter la commande /versusai
+      commands.push(
+        new SlashCommandBuilder()
+          .setName('versusai')
+          .setDescription('OpenAI vs Grok débattent un sujet')
+          .addStringOption(opt =>
+            opt.setName('sujet')
+              .setDescription('Le sujet à débattre')
+              .setRequired(true)
+          )
+      );
+
+      // Ajouter la commande /debate-respond
+      commands.push(
+        new SlashCommandBuilder()
+          .setName('debate-respond')
+          .setDescription('Propose un argument et déclenche un débat des 2 IAs')
+          .addStringOption(opt =>
+            opt.setName('argument')
+              .setDescription('Ton argument à débattre')
+              .setRequired(true)
+          )
+      );
+
+      // Ajouter la commande /debate-respond-grok
+      commands.push(
+        new SlashCommandBuilder()
+          .setName('debate-respond-grok')
+          .setDescription('Attaque Grok avec un argument')
+          .addStringOption(opt =>
+            opt.setName('argument')
+              .setDescription('Ton argument contre Grok')
+              .setRequired(true)
+          )
+      );
+
+      // Ajouter la commande /debate-respond-openai
+      commands.push(
+        new SlashCommandBuilder()
+          .setName('debate-respond-openai')
+          .setDescription('Attaque OpenAI avec un argument')
+          .addStringOption(opt =>
+            opt.setName('argument')
+              .setDescription('Ton argument contre OpenAI')
+              .setRequired(true)
+          )
+      );
+
       await guild.commands.set(commands);
       console.log('✅ Slash commands enregistrées');
     }
@@ -1670,6 +2184,26 @@ client.on('interactionCreate', async (interaction) => {
 
       if (commandName === 'roast') {
         await handleRoastCommand(interaction);
+        return;
+      }
+
+      if (commandName === 'versusai') {
+        await handleVersusAiCommand(interaction);
+        return;
+      }
+
+      if (commandName === 'debate-respond') {
+        await handleDebateRespondCommand(interaction);
+        return;
+      }
+
+      if (commandName === 'debate-respond-grok') {
+        await handleDebateRespondGrokCommand(interaction);
+        return;
+      }
+
+      if (commandName === 'debate-respond-openai') {
+        await handleDebateRespondOpenaiCommand(interaction);
         return;
       }
 
