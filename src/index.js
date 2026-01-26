@@ -2676,11 +2676,11 @@ async function applyCodeModification(message, modInfo) {
         
         console.log(`✅ Code modification applied: ${modInfo.question} (Major: ${isMajorChange})`);
       } else {
-        await message.channel.send('✅ Code appliqué! (Git repo non détecté)');
+        await message.channel.send('✅ Code appliqué!\n⏰ Le changement sera effectif au prochain redémarrage automatique de Railway (généralement chaque jour).');
       }
     } catch (gitError) {
       console.warn('⚠️ Git operation failed:', gitError.message);
-      await message.channel.send('✅ Code appliqué! (Git commit échoué)');
+      await message.channel.send('✅ Code appliqué!\n⏰ Le changement sera effectif au prochain redémarrage automatique de Railway (généralement chaque jour).');
     }
 
   } catch (error) {
