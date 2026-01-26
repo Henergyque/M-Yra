@@ -2025,8 +2025,8 @@ async function handleAIAssistant(message) {
         getGrokAssistantResponse(userQuestion, contextMessages, isCreator)
       ]);
 
-      // Merge responses intelligently
-      const mergedResponse = mergeAssistantResponses(openaiResponse, grokResponse, userQuestion);
+      // Merge responses intelligently into one unified response
+      const mergedResponse = await mergeAssistantResponses(openaiResponse, grokResponse, userQuestion);
 
       // Split into chunks if needed (Discord 2000 char limit)
       const chunks = mergedResponse.match(/[\s\S]{1,1900}/g) || [mergedResponse];
@@ -2130,31 +2130,50 @@ ${context}`;
   }
 }
 
-// Merge OpenAI + Grok responses intelligently
-function mergeAssistantResponses(openaiResp, grokResp, question) {
+// Merge OpenAI + Grok responses intelligently into one unified response
+async function mergeAssistantResponses(openaiResp, grokResp, question) {
   // If one fails, return the other
   if (!openaiResp) return grokResp || 'Erreur: pas de réponse disponible';
   if (!grokResp) return openaiResp;
 
-  // Check question type to decide lead
-  const isCodeQuestion = /code|javascript|python|sql|function|variable|api|error|bug|debug/i.test(question);
-  const isMathQuestion = /math|calcul|équation|nombre|formule|statistique/i.test(question);
-  const isCreativeQuestion = /créatif|histoire|poème|idée|brainstorm|conseil|opinion/i.test(question);
+  try {
+    // Use OpenAI to intelligently fuse both responses into one perfect answer
+    const fusionPrompt = `Tu dois fusionner deux réponses en une seule réponse ULTRA NATURELLE et HUMAINE.
 
-  let merged = '';
+Question: "${question}"
 
-  if (isCodeQuestion || isMathQuestion) {
-    // OpenAI leads for logic/technical
-    merged = `**💙 Réponse technique (OpenAI):**\n${openaiResp}\n\n**💚 Point de vue (Grok):**\n${grokResp}`;
-  } else if (isCreativeQuestion) {
-    // Grok leads for creative
-    merged = `**💚 Réponse créative (Grok):**\n${grokResp}\n\n**💙 Analyse (OpenAI):**\n${openaiResp}`;
-  } else {
-    // Balanced for other questions
-    merged = `**Réponse combinée:**\n\n**OpenAI:** ${openaiResp}\n\n**Grok:** ${grokResp}`;
+Réponse 1: "${openaiResp}"
+
+Réponse 2: "${grokResp}"
+
+RÈGLES ABSOLUES:
+- Fusionne en UNE réponse comme si tu parlais naturellement à un pote
+- JAMAIS mentionner qu'il y a plusieurs réponses ou IA
+- C'est OK d'être imparfait: oublie des majuscules, fais des mini fautes, utilise "genre", "du coup", "haha", "lol"
+- Sois conversationnel, PAS formel ou parfait
+- Prends le meilleur des deux mais garde le flow naturel
+- Si y'a contradiction, choisis le plus pertinent ou mixe intelligemment
+- Sois direct, humain, décontracté
+- Varie ton style, sois pas robotique
+
+Réponds comme un humain qui tchat sur Discord, avec ses imperfections et son naturel!`;
+
+    const fusionResponse = await openai.chat.completions.create({
+      model: 'gpt-4o',
+      messages: [
+        { role: 'system', content: fusionPrompt },
+        { role: 'user', content: 'Fusionne ces réponses en une seule.' }
+      ],
+      max_tokens: 2000,
+      temperature: 0.8
+    });
+
+    return fusionResponse.choices[0].message.content.trim();
+  } catch (error) {
+    console.error('❌ Erreur fusion responses:', error);
+    // Fallback: return both if fusion fails
+    return `${openaiResp}\n\n${grokResp}`;
   }
-
-  return merged;
 }
 
 // Try to generate and execute code
