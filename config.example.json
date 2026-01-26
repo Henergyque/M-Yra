@@ -5,8 +5,12 @@
   "countingChannelId": "COUNTING_CHANNEL_ID",
   "wordGameChannelId": "WORD_GAME_CHANNEL_ID",
   "storyLibraryChannelId": "STORY_LIBRARY_CHANNEL_ID",
+  "assistantChannelId": "ASSISTANT_CHANNEL_ID",
   "openaiApiKey": "sk-YOUR_OPENAI_API_KEY_HERE",
   "grokApiKey": "YOUR_GROK_API_KEY_HERE",
   "creatorId": "YOUR_USER_ID_FOR_CLEAR_COMMAND",
-  "adminUserIds": ["ADMIN_USER_ID"]
+  "adminUserIds": ["ADMIN_USER_ID"],
+  "githubRepo": "https://github.com/USERNAME/REPO.git",
+  "githubToken": "YOUR_GITHUB_TOKEN_HERE",
+  "gitTargetBranch": "main"
 }

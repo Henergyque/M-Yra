@@ -39,6 +39,7 @@ Copiez `config.example.json` en `config.json` et remplissez les valeurs:
   "countingChannelId": "COUNTING_CHANNEL_ID",
   "wordGameChannelId": "WORD_GAME_CHANNEL_ID",
   "storyLibraryChannelId": "STORY_LIBRARY_CHANNEL_ID",
+  "assistantChannelId": "ASSISTANT_CHANNEL_ID",
   "openaiApiKey": "sk-YOUR_OPENAI_API_KEY_HERE",
   "grokApiKey": "YOUR_GROK_API_KEY_HERE",
   "creatorId": "YOUR_USER_ID_FOR_CLEAR_COMMAND",
@@ -197,6 +198,22 @@ Jeu interactif avec boutons:
 - **Vérité** - joueur répond à une question
 - **Terminé** - libère le verrou
 - Thread auto-créé pour chaque tour
+
+### 🤖 Assistant IA Personnel
+Dans le thread `assistantChannelId` configuré, le bot répond **automatiquement** à chaque message:
+- Pas de commande, pas de mention, juste écris dans le thread
+- Les 2 IAs (OpenAI + Grok) génèrent des réponses en parallèle
+- **Fusion intelligente:** OpenAI lead pour tech/math, Grok lead pour créatif
+- Contexte persistant (lit les 10 messages précédents)
+- Répond directement dans le thread
+- Peut vous aider sur: code, conseils, explications, brainstorm, etc.
+
+**Pour le creatorId UNIQUEMENT:**
+- Génère et exécute du code JavaScript/Python: "génère un code qui..."
+- Suggère des modifications au bot: "modifie ton code pour ajouter..."
+- Le bot génère le code, l'affiche, puis demande confirmation avant toute modification
+
+Le bot détecte le type de question et adapte qui prend la lead pour la réponse la plus optimale.
 
 ### ☕ Support
 ```

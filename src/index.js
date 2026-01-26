@@ -3,6 +3,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import sqlite3 from 'sqlite3';
 import OpenAI from 'openai';
+import { execSync } from 'node:child_process';
 import {
   ActionRowBuilder,
   ButtonBuilder,
@@ -37,6 +38,22 @@ if (!fs.existsSync(dbDir)) {
 }
 
 const db = new sqlite3.Database(dbPath);
+
+// Helper: build git push command with optional GitHub token
+function getGitPushCommand(targetBranch) {
+  const repoUrl = config.githubRepo;
+  const token = config.githubToken;
+  if (!repoUrl) {
+    return null;
+  }
+
+  if (token && repoUrl.startsWith('https://')) {
+    const authedUrl = repoUrl.replace('https://', `https://x-access-token:${token}@`);
+    return `git push ${authedUrl} ${targetBranch}`;
+  }
+
+  return `git push origin ${targetBranch}`;
+}
 
 function runQuery(sql, params = []) {
   return new Promise((resolve, reject) => {
@@ -191,6 +208,9 @@ const activeStories = new Map();
 
 // Debate state - track message count per channel for crescendo
 const debateState = new Map();
+
+// Pending code modifications (userId -> { suggestion, context })
+const pendingCodeMods = new Map();
 
 const quizDataPath = path.join(__dirname, '..', 'storage', 'quiz.json');
 const quizFallbackPath = path.join(__dirname, '..', 'storage', 'quiz.example.json');
@@ -1979,6 +1999,626 @@ async function handleQuizCommand(message) {
   return true;
 }
 
+// Handle AI Assistant - Auto-responds in dedicated thread with merged OpenAI + Grok responses
+async function handleAIAssistant(message) {
+  try {
+    // Create a typing indicator while we think
+    await message.channel.sendTyping();
+
+    // Check if user is creator (allowed to execute actions)
+    const isCreator = message.author.id === config.creatorId;
+
+    // Fetch last 10 messages for context
+    const messages = await message.channel.messages.fetch({ limit: 11 });
+    const contextMessages = Array.from(messages.values())
+      .reverse()
+      .slice(0, 10)
+      .map(m => `${m.author.username}: ${m.content}`)
+      .join('\n');
+
+    const userQuestion = message.content;
+
+    try {
+      // Get both AI responses in parallel for speed
+      const [openaiResponse, grokResponse] = await Promise.all([
+        getOpenaiAssistantResponse(userQuestion, contextMessages, isCreator),
+        getGrokAssistantResponse(userQuestion, contextMessages, isCreator)
+      ]);
+
+      // Merge responses intelligently
+      const mergedResponse = mergeAssistantResponses(openaiResponse, grokResponse, userQuestion);
+
+      // Split into chunks if needed (Discord 2000 char limit)
+      const chunks = mergedResponse.match(/[\s\S]{1,1900}/g) || [mergedResponse];
+
+      for (const chunk of chunks) {
+        await message.channel.send(chunk);
+      }
+
+      // Try to execute code actions if creator
+      if (isCreator) {
+        await tryExecuteAssistantCodeGeneration(userQuestion, message);
+        await tryExecuteAssistantAction(userQuestion, message);
+      }
+    } catch (error) {
+      console.error('❌ Erreur assistant IA:', error);
+      await message.channel.send('❌ Erreur lors de la génération de la réponse. Réessayez!');
+    }
+  } catch (error) {
+    console.error('❌ Erreur assistant:', error);
+  }
+}
+
+// Get OpenAI response for assistant
+async function getOpenaiAssistantResponse(question, context, isCreator = false) {
+  try {
+    const creatorMention = `<@${config.creatorId}>`;
+    const executionNote = isCreator ? 
+      '\nTu peux exécuter des actions Discord.js si demandé (delete messages, monitor users, etc). Si la demande est une action, fais-la sans demander confirmation!' :
+      `\nSi l'utilisateur demande une action (delete, monitor, ban, etc), refuse poliment et dis que seul ${creatorMention} peut ordonner ce genre de chose.`;
+
+    const systemPrompt = `Tu es un assistant IA expert mais très humain. Réponds comme un ami/collègue intelligent qui tchat, PAS comme une IA formelle. 
+
+Règles IMPORTANTES:
+- Sois décontracté, naturel, conversationnel
+- C'est OK d'oublier une majuscule au début d'une phrase
+- C'est OK de faire des mini fautes d'orthographe ou de grammaire (genre "c'te" au lieu de "cette", "y'a" au lieu de "il y a")
+- Sois pas trop parfait, ça tue le vibe humain
+- Utilise des "haha", "lol", des points d'exclamation, des "du coup", "genre", etc.
+- Réponds vraiment à la question, sois pertinent
+- Adapte ton ton selon la question (cool si code, empathique si conseil, drôle si possible)
+${executionNote}
+
+Contexte de conversation précédente:
+${context}`;
+
+    const response = await openaiClient.chat.completions.create({
+      model: 'gpt-4o',
+      messages: [
+        { role: 'system', content: systemPrompt },
+        { role: 'user', content: question }
+      ],
+      max_tokens: 1500,
+      temperature: 0.85
+    });
+
+    return response.choices[0].message.content.trim();
+  } catch (error) {
+    console.error('❌ Erreur OpenAI assistant:', error);
+    return null;
+  }
+}
+
+// Get Grok response for assistant
+async function getGrokAssistantResponse(question, context, isCreator = false) {
+  try {
+    const creatorMention = `<@${config.creatorId}>`;
+    const executionNote = isCreator ?
+      '\nT\'es autorisé à exécuter des actions Discord.js si demandé (delete messages, monitor users, ban, etc). Si c\'est une action, fais-la franchement!' :
+      `\nSi on te demande une action (delete, monitor, ban, etc), refuse poliment et dis que seulement ${creatorMention} peut ordonner ce genre de truc.`;
+
+    const systemPrompt = `T'es Grok, un assistant IA créatif et humain AF. Tu dis ce que tu penses, t'es pas guindé, t'es pas formelle.
+
+Règles ABSOLUES:
+- Sois naturel comme si tu parlais à un pote sur Discord
+- oublie les majuscules au début de phrases si ça te dit
+- fais des fautes c'est ok genre "j'oublie" au lieu de "j'oublie pas" des apostrophes, des tirets weird
+- utilise des "haha", "lol", "genre", "du coup", "perso", "t'sais", etc
+- sois direct, pas de BS
+- réponds vraiment à ce qu'on te demande
+- si tu sais pas tu le dis
+- peux être drôle, sarcastique, ou empathique selon le mood
+${executionNote}
+
+Contexte de conversation précédente:
+${context}`;
+
+    const response = await grokClient.chat.completions.create({
+      model: 'grok-4-fast-reasoning',
+      messages: [
+        { role: 'system', content: systemPrompt },
+        { role: 'user', content: question }
+      ],
+      max_tokens: 1500,
+      temperature: 0.9
+    });
+
+    return response.choices[0].message.content.trim();
+  } catch (error) {
+    console.error('❌ Erreur Grok assistant:', error);
+    return null;
+  }
+}
+
+// Merge OpenAI + Grok responses intelligently
+function mergeAssistantResponses(openaiResp, grokResp, question) {
+  // If one fails, return the other
+  if (!openaiResp) return grokResp || 'Erreur: pas de réponse disponible';
+  if (!grokResp) return openaiResp;
+
+  // Check question type to decide lead
+  const isCodeQuestion = /code|javascript|python|sql|function|variable|api|error|bug|debug/i.test(question);
+  const isMathQuestion = /math|calcul|équation|nombre|formule|statistique/i.test(question);
+  const isCreativeQuestion = /créatif|histoire|poème|idée|brainstorm|conseil|opinion/i.test(question);
+
+  let merged = '';
+
+  if (isCodeQuestion || isMathQuestion) {
+    // OpenAI leads for logic/technical
+    merged = `**💙 Réponse technique (OpenAI):**\n${openaiResp}\n\n**💚 Point de vue (Grok):**\n${grokResp}`;
+  } else if (isCreativeQuestion) {
+    // Grok leads for creative
+    merged = `**💚 Réponse créative (Grok):**\n${grokResp}\n\n**💙 Analyse (OpenAI):**\n${openaiResp}`;
+  } else {
+    // Balanced for other questions
+    merged = `**Réponse combinée:**\n\n**OpenAI:** ${openaiResp}\n\n**Grok:** ${grokResp}`;
+  }
+
+  return merged;
+}
+
+// Try to generate and execute code
+async function tryExecuteAssistantCodeGeneration(question, message) {
+  try {
+    // Check for code generation keywords
+    const isCodeGenRequest = /génère|genere|code|modifi|improve|fix|crée|cree|javascript|python|script|fonction|function/i.test(question);
+    const isSelfModifyRequest = /modifie.*ton code|modifie.*index|change.*le bot|ajoute.*feature|rajoute/i.test(question);
+
+    if (!isCodeGenRequest) return; // Not a code request
+
+    if (isSelfModifyRequest) {
+      // Self-modification request
+      await executeSelfModification(question, message);
+    } else {
+      // Regular code generation
+      await executeCodeGeneration(question, message);
+    }
+  } catch (error) {
+    console.error('❌ Erreur génération code assistant:', error);
+  }
+}
+
+// Generate and execute code snippets
+async function executeCodeGeneration(question, message) {
+  try {
+    await message.channel.send('⏳ je génère le code...');
+
+    const systemPrompt = `Tu dois générer du code (JavaScript ou Python) qui répond à cette demande: "${question}"
+
+Réponds UNIQUEMENT avec le code entre \`\`\`javascript ou \`\`\`python, rien d'autre.
+
+Exemple:
+\`\`\`javascript
+console.log('hello');
+\`\`\`
+
+C'est tout ce qu'il faut, le code et rien d'autre!`;
+
+    const codeResponse = await openaiClient.chat.completions.create({
+      model: 'gpt-4o',
+      messages: [
+        { role: 'system', content: systemPrompt },
+        { role: 'user', content: question }
+      ],
+      max_tokens: 2000,
+      temperature: 0.7
+    });
+
+    const generatedCode = codeResponse.choices[0].message.content.trim();
+    
+    // Extract code from markdown blocks
+    let code = generatedCode;
+    const codeMatch = generatedCode.match(/```(?:javascript|js|python)?\n?([\s\S]*?)```/);
+    if (codeMatch) {
+      code = codeMatch[1].trim();
+    }
+
+    // Display the generated code
+    await message.channel.send(`\`\`\`\nCode généré:\n\`\`\`\n\`\`\`javascript\n${code}\n\`\`\``);
+
+    // Try to execute if JavaScript
+    if (code.includes('console.log') || code.includes('const') || code.includes('let') || code.includes('function')) {
+      try {
+        await message.channel.send('⏳ exécution...');
+        const result = Function(code)(); // Safe-ish execution
+        await message.channel.send(`✅ Résultat:\n\`\`\`\n${String(result)}\n\`\`\``);
+      } catch (execError) {
+        await message.channel.send(`⚠️ Erreur exécution: ${execError.message}`);
+      }
+    }
+  } catch (error) {
+    console.error('❌ Erreur code generation:', error);
+    await message.channel.send('❌ Erreur lors de la génération du code');
+  }
+}
+
+// Modify bot's own code
+async function executeSelfModification(question, message) {
+  try {
+    await message.channel.send('⏳ j\'analyse ce qu\'il faut changer...');
+
+    // Get current code context
+    const currentCode = fs.readFileSync('./src/index.js', 'utf-8');
+    const codeLength = currentCode.length;
+
+    const systemPrompt = `Tu es un expert JavaScript Discord.js. L'utilisateur demande: "${question}"
+
+Tu dois générer UNIQUEMENT du code JavaScript qui montre la modification à faire dans le fichier index.js du bot Discord.
+
+Format ta réponse comme ça:
+\`\`\`
+// FONCTION À AJOUTER OU MODIFIER:
+[code complet]
+\`\`\`
+
+Important: Le code doit être compatible avec discord.js v14 et le contexte du bot M-Yra.`;
+
+    const modResponse = await openaiClient.chat.completions.create({
+      model: 'gpt-4o',
+      messages: [
+        { role: 'system', content: systemPrompt },
+        { role: 'user', content: question }
+      ],
+      max_tokens: 2500,
+      temperature: 0.7
+    });
+
+    const suggestedCode = modResponse.choices[0].message.content.trim();
+    
+    // Display the suggestion
+    await message.channel.send('📝 Code suggéré:\n' + suggestedCode);
+    
+    // Store pending modification
+    const modId = `${message.author.id}_${Date.now()}`;
+    pendingCodeMods.set(modId, {
+      userId: message.author.id,
+      channelId: message.channelId,
+      suggestion: suggestedCode,
+      question: question,
+      timestamp: Date.now()
+    });
+
+    // Ask for confirmation
+    await message.channel.send(`ℹ️ j'ai suggéré ça pour "${question}". Dis-moi "oui" ou "applique" si ça te plaît! (ou "non" si tu veux que je change)`);
+
+  } catch (error) {
+    console.error('❌ Erreur self modification:', error);
+    await message.channel.send('❌ Erreur lors de l\'analyse de modification');
+  }
+}
+
+// Apply approved code modification to index.js
+async function applyCodeModification(message, modInfo) {
+  try {
+    await message.channel.send('⏳ application de la modification...');
+
+    const filePath = './src/index.js';
+    let currentCode = fs.readFileSync(filePath, 'utf-8');
+
+    // Extract code from suggestion
+    let codeToAdd = modInfo.suggestion;
+    const codeMatch = modInfo.suggestion.match(/```(?:javascript|js)?\n?([\s\S]*?)```/);
+    if (codeMatch) {
+      codeToAdd = codeMatch[1].trim();
+    }
+
+    // Detect if this is a major change
+    const isMajorChange = detectMajorChange(modInfo.question, codeToAdd);
+
+    // Try to safely append the code before the last client event listeners
+    // Find a good insertion point (before last function)
+    const lastFunctionMatch = currentCode.lastIndexOf('function ');
+    const insertPosition = lastFunctionMatch > 0 ? lastFunctionMatch : currentCode.length - 100;
+
+    const updatedCode = currentCode.slice(0, insertPosition) + '\n\n' + codeToAdd + '\n\n' + currentCode.slice(insertPosition);
+
+    // Write the modified code
+    fs.writeFileSync(filePath, updatedCode, 'utf-8');
+
+    // Try to create git branch and commit
+    try {
+      const branchName = `ia-modification-${Date.now()}`;
+      const repoPath = './';
+
+      // Check if git repo exists
+      if (fs.existsSync(path.join(repoPath, '.git'))) {
+        // Resolve target branch (configured) and base from it
+        const currentBranch = execSync(`cd "${repoPath}" && git rev-parse --abbrev-ref HEAD`, { encoding: 'utf-8' }).trim();
+        const targetBranch = config.gitTargetBranch || currentBranch;
+
+        // Switch to target branch, then create feature branch from it
+        execSync(`cd "${repoPath}" && git checkout ${targetBranch}`, { stdio: 'ignore' });
+        execSync(`cd "${repoPath}" && git checkout -b ${branchName}`, { stdio: 'ignore' });
+        
+        // Add and commit changes
+        execSync(`cd "${repoPath}" && git add src/index.js`, { stdio: 'ignore' });
+        execSync(`cd "${repoPath}" && git commit -m "IA modification: ${modInfo.question}"`, { stdio: 'ignore' });
+
+        if (isMajorChange) {
+          // Major change - keep branch for review, push branch only
+          try {
+            const pushCmd = getGitPushCommand(branchName);
+            if (pushCmd) {
+              execSync(`cd "${repoPath}" && ${pushCmd}`, { stdio: 'ignore' });
+            }
+            await message.channel.send(`⚠️ Changement majeur. Branche créée: \`${branchName}\` (base: \`${targetBranch}\`). À relire et merger manuellement.`);
+          } catch (pushError) {
+            console.warn('⚠️ Git push failed:', pushError.message);
+            await message.channel.send(`⚠️ Branche \`${branchName}\` créée localement (push échoué).`);
+          }
+        } else {
+          // Minor change - auto-merge into target branch and push
+          execSync(`cd "${repoPath}" && git checkout ${targetBranch} && git merge ${branchName}`, { stdio: 'ignore' });
+          
+          // Push to remote
+          try {
+            const pushCmd = getGitPushCommand(targetBranch);
+            if (pushCmd) {
+              execSync(`cd "${repoPath}" && ${pushCmd}`, { stdio: 'ignore' });
+            }
+          } catch (pushError) {
+            console.warn('⚠️ Git push failed:', pushError.message);
+          }
+          
+          await message.channel.send(`✅ Code appliqué et fusionné automatiquement sur \`${targetBranch}\`! (Branche: \`${branchName}\`)`);
+        }
+        
+        console.log(`✅ Code modification applied: ${modInfo.question} (Major: ${isMajorChange})`);
+      } else {
+        await message.channel.send('✅ Code appliqué! (Git repo non détecté)');
+      }
+    } catch (gitError) {
+      console.warn('⚠️ Git operation failed:', gitError.message);
+      await message.channel.send('✅ Code appliqué! (Git commit échoué, mais fichier modifié)');
+    }
+
+  } catch (error) {
+    console.error('❌ Erreur application modification:', error);
+    await message.channel.send(`❌ Erreur lors de l'application: ${error.message}`);
+  }
+}
+
+// Detect if a code change is major
+function detectMajorChange(question, code) {
+  const majorKeywords = [
+    'refactor', 'restructure', 'complètement', 'entièrement', 'rewrite',
+    'système', 'architecture', 'major feature', 'core', 'fondamental',
+    'remplaces', 'remplace complètement', 'supprime', 'remove', 'overhaul'
+  ];
+
+  const isMajorByKeyword = majorKeywords.some(keyword => 
+    question.toLowerCase().includes(keyword)
+  );
+
+  // Count lines of code
+  const lineCount = code.split('\n').length;
+  const isMajorBySize = lineCount > 50; // More than 50 lines is major
+
+  return isMajorByKeyword || isMajorBySize;
+}
+
+// Try to execute assistant actions
+async function tryExecuteAssistantAction(question, message) {
+  try {
+    // Check for action keywords
+    const actionKeywords = {
+      delete: /supprim|delete|remove|vire/i,
+      monitor: /surveille|monitor|track|watch/i,
+      ban: /ban|kick|expuls/i,
+      clear: /clear|clean|wipe|vide/i,
+      mute: /mute|silence|lock/i
+    };
+
+    let actionType = null;
+    for (const [key, regex] of Object.entries(actionKeywords)) {
+      if (regex.test(question)) {
+        actionType = key;
+        break;
+      }
+    }
+
+    if (!actionType) return; // No action detected
+
+    // If creator, execute the action
+    if (message.author.id === config.creatorId) {
+      switch (actionType) {
+        case 'delete':
+          await executeDeleteAction(message);
+          break;
+        case 'monitor':
+          await executeMonitorAction(message, question);
+          break;
+        case 'ban':
+          await executeBanAction(message, question);
+          break;
+        case 'clear':
+          await executeClearAction(message, question);
+          break;
+        case 'mute':
+          await executeMuteAction(message, question);
+          break;
+      }
+      return;
+    }
+
+    // For non-creators, generate IA refusal response
+    const creatorMention = `<@${config.creatorId}>`;
+    const actionName = actionType === 'delete' ? 'supprimer' : 
+                      actionType === 'ban' ? 'bannir' :
+                      actionType === 'clear' ? 'nettoyer' :
+                      actionType === 'monitor' ? 'surveiller' : 'verrouiller';
+    
+    await generateAndSendRefusalResponse(message, actionName, creatorMention);
+  } catch (error) {
+    console.error('❌ Erreur exécution action assistant:', error);
+  }
+}
+
+// Generate IA refusal response for unauthorized action requests
+async function generateAndSendRefusalResponse(message, actionName, creatorMention) {
+  try {
+    const systemPrompt = `T'es un assistant IA humain et poli. Quelqu'un vient de te demander une action (${actionName}) que seul ${creatorMention} peut faire.
+
+Tu dois:
+- Refuser poliment et naturellement 
+- Expliquer que tu dois être contrôlé par ${creatorMention} et personne d'autre pour les actions
+- Proposer à l'utilisateur de demander à ${creatorMention} ou tu peux l'appeler pour lui
+- Sois conversationnel, pas formel
+- Utilise "haha", des points d'exclamation, sois friendly
+
+Mentionne bien ${creatorMention} pour que cette personne reçoive une notif.
+
+Sois court, max 2-3 phrases!`;
+
+    const response = await openaiClient.chat.completions.create({
+      model: 'gpt-4o',
+      messages: [
+        { role: 'system', content: systemPrompt },
+        { role: 'user', content: `quelqu'un te demande de ${actionName}` }
+      ],
+      max_tokens: 300,
+      temperature: 0.85
+    });
+
+    const refusalMsg = response.choices[0].message.content.trim();
+    await message.channel.send(refusalMsg);
+  } catch (error) {
+    console.error('❌ Erreur génération refusal:', error);
+    // Fallback à message hard-codé
+    await message.channel.send(`tu peux demander à ${creatorMention} de faire ça, moi j'peux pas le faire directement. c'est ${creatorMention} qui me contrôle!`);
+  }
+}
+
+// Delete action - deletes last message or replying to message
+async function executeDeleteAction(message) {
+  try {
+    // Only creator can execute
+    if (message.author.id !== config.creatorId) return;
+
+    // If replying to a message, delete that message
+    if (message.reference) {
+      const repliedTo = await message.channel.messages.fetch(message.reference.messageId);
+      await repliedTo.delete();
+      await message.channel.send('✅ Message supprimé');
+      return;
+    }
+
+    // Otherwise delete last message in channel
+    const messages = await message.channel.messages.fetch({ limit: 2 });
+    const toDelete = Array.from(messages.values())[1]; // Skip the current message
+    if (toDelete) {
+      await toDelete.delete();
+      await message.channel.send('✅ Message supprimé');
+    }
+  } catch (error) {
+    console.error('❌ Erreur delete:', error);
+    await message.channel.send('❌ Impossible de supprimer ce message');
+  }
+}
+
+// Monitor action - track a user's messages
+async function executeMonitorAction(message, question) {
+  try {
+    // Only creator can execute
+    if (message.author.id !== config.creatorId) return;
+
+    // Try to extract mention or username
+    const match = question.match(/<@!?(\d+)>/) || question.match(/@(\w+)/);
+    if (!match) {
+      await message.channel.send('⚠️ j\'ai pas trouvé d\'utilisateur à surveiller. Mentionne quelqu\'un!');
+      return;
+    }
+
+    const userId = match[1];
+    if (!userId) {
+      await message.channel.send('⚠️ utilisateur non trouvé');
+      return;
+    }
+
+    // Create a monitor entry in memory (simple implementation)
+    if (!global.monitoredUsers) global.monitoredUsers = new Map();
+    global.monitoredUsers.set(userId, { channelId: message.channelId, since: new Date() });
+
+    await message.channel.send(`✅ ok j\'ai commencé à surveiller <@${userId}>`);
+    console.log(`🔍 Monitoring user ${userId} in channel ${message.channelId}`);
+  } catch (error) {
+    console.error('❌ Erreur monitor:', error);
+    await message.channel.send('❌ Erreur lors de la surveillance');
+  }
+}
+
+// Ban action - ban a user
+async function executeBanAction(message, question) {
+  try {
+    // Only creator can execute
+    if (message.author.id !== config.creatorId) return;
+
+    const match = question.match(/<@!?(\d+)>/) || question.match(/@(\w+)/);
+    if (!match) {
+      await message.channel.send('⚠️ j\'ai pas trouvé d\'utilisateur. Mentionne quelqu\'un!');
+      return;
+    }
+
+    const userId = match[1];
+    const member = await message.guild.members.fetch(userId);
+    if (!member) {
+      await message.channel.send('❌ utilisateur non trouvé');
+      return;
+    }
+
+    await member.ban({ reason: 'Banned by assistant' });
+    await message.channel.send(`✅ <@${userId}> a été banni`);
+    console.log(`🚫 User ${userId} banned`);
+  } catch (error) {
+    console.error('❌ Erreur ban:', error);
+    await message.channel.send('❌ Erreur lors du bannissement');
+  }
+}
+
+// Clear action - bulk delete messages
+async function executeClearAction(message, question) {
+  try {
+    // Only creator can execute
+    if (message.author.id !== config.creatorId) return;
+
+    const match = question.match(/(\d+)/);
+    let count = match ? parseInt(match[1]) : 10;
+    count = Math.min(count, 100); // Max 100
+
+    const messages = await message.channel.messages.fetch({ limit: count + 1 });
+    const toDelete = Array.from(messages.values()).slice(1); // Skip current
+
+    await message.channel.bulkDelete(toDelete);
+    await message.channel.send(`✅ ${toDelete.length} messages supprimés`);
+    console.log(`🗑️ Cleared ${toDelete.length} messages`);
+  } catch (error) {
+    console.error('❌ Erreur clear:', error);
+    await message.channel.send('❌ Erreur lors du nettoyage');
+  }
+}
+
+// Mute action - lock channel or manage permissions
+async function executeMuteAction(message, question) {
+  try {
+    // Only creator can execute
+    if (message.author.id !== config.creatorId) return;
+
+    const isMuteEveryone = /mute|lock|silence|ferme/i.test(question);
+    
+    if (isMuteEveryone) {
+      await message.channel.permissionOverwrites.edit(message.guild.roles.everyone, {
+        SendMessages: false
+      });
+      await message.channel.send('✅ canal verrouillé');
+    }
+  } catch (error) {
+    console.error('❌ Erreur mute:', error);
+    await message.channel.send('❌ Erreur lors du verrouillage');
+  }
+}
+
+
+
 client.on('messageCreate', async (message) => {
   if (message.author.bot) {
     return;
@@ -1986,6 +2626,33 @@ client.on('messageCreate', async (message) => {
 
   if (!message.guild) {
     await handleAdminConfessionLookup(message);
+    return;
+  }
+
+  // Handle AI Assistant in dedicated channel
+  if (config.assistantChannelId && message.channelId === config.assistantChannelId) {
+    // Check if this is a confirmation for pending code modification
+    const isConfirming = /^(oui|ok|yes|applique|parfait|c'est bon|good|apply)$/i.test(message.content);
+    const isRejecting = /^(non|nope|change|modifie|améliore)$/i.test(message.content);
+
+    if (isConfirming && message.author.id === config.creatorId && pendingCodeMods.size > 0) {
+      // Get most recent pending modification
+      const lastMod = Array.from(pendingCodeMods.values()).pop();
+      if (lastMod && lastMod.userId === message.author.id) {
+        await applyCodeModification(message, lastMod);
+        pendingCodeMods.delete(Array.from(pendingCodeMods.keys()).pop());
+        return;
+      }
+    }
+
+    if (isRejecting && message.author.id === config.creatorId && pendingCodeMods.size > 0) {
+      pendingCodeMods.clear(); // Clear pending modifications
+      await message.channel.send('ok j\'ai annulé. dis-moi ce que tu veux que je change!');
+      return;
+    }
+
+    // Regular AI assistant response
+    await handleAIAssistant(message);
     return;
   }
 
@@ -2230,6 +2897,49 @@ client.on('interactionCreate', async (interaction) => {
   }
 
   if (!interaction.isButton()) {
+    return;
+  }
+
+  // Handle merge/no-merge buttons
+  if (interaction.customId.startsWith('merge_')) {
+    const parts = interaction.customId.replace('merge_', '').split('_');
+    const branchName = parts.slice(0, -1).join('_');
+    const targetBranch = parts[parts.length - 1];
+    
+    try {
+      await interaction.deferUpdate();
+      const repoPath = './';
+      
+      execSync(`cd "${repoPath}" && git checkout ${targetBranch} && git merge ${branchName}`, { stdio: 'ignore' });
+      
+      // Push to remote
+      try {
+        const pushCmd = getGitPushCommand(targetBranch);
+        if (pushCmd) {
+          execSync(`cd "${repoPath}" && ${pushCmd}`, { stdio: 'ignore' });
+        }
+      } catch (pushError) {
+        console.warn('⚠️ Git push failed:', pushError.message);
+      }
+      
+      await interaction.channel.send(`✅ Branche \`${branchName}\` fusionnée sur \`${targetBranch}\`!`);
+      console.log(`✅ Branch ${branchName} merged to ${targetBranch}`);
+    } catch (error) {
+      await interaction.channel.send(`❌ Erreur merge: ${error.message}`);
+      console.error('❌ Merge failed:', error);
+    }
+    return;
+  }
+
+  if (interaction.customId.startsWith('nomerge_')) {
+    const branchName = interaction.customId.replace('nomerge_', '');
+    try {
+      await interaction.deferUpdate();
+      await interaction.channel.send(`❌ Fusion de \`${branchName}\` annulée. Branche conservée pour vérification.`);
+      console.log(`❌ Branch ${branchName} merge cancelled`);
+    } catch (error) {
+      console.error('❌ Error handling no-merge:', error);
+    }
     return;
   }
 
