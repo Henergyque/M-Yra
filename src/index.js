@@ -2588,7 +2588,7 @@ INTERDICTIONS:
     });
 
     // Ask for confirmation
-    await message.channel.send(`ℹ️ j'ai suggéré ça pour "${question}". Dis-moi "oui" ou "applique" si ça te plaît! (ou "non" si tu veux que je change)`);
+    await message.channel.send(`💡 **Code suggéré ci-dessus**\n\n✅ Réponds **"oui"** ou **"applique"** pour l'ajouter\n❌ Réponds **"non"** pour annuler\n🔄 Réponds **"non, [feedback]"** pour que je corrige (ex: "non, mets tout en français")`);
 
   } catch (error) {
     console.error('❌ Erreur self modification:', error);
@@ -2964,42 +2964,51 @@ client.on('messageCreate', async (message) => {
   );
 
   if (isAssistantContext) {
-    // Check if this is a confirmation for pending code modification
-    const isConfirming = /^(oui|ok|yes|applique|parfait|c'est bon|good|apply)$/i.test(message.content);
-    const isRejecting = /^(non|nope|change|modifie|améliore)$/i.test(message.content);
-
-    if (isConfirming && message.author.id === config.creatorId && pendingCodeMods.size > 0) {
-      // Get most recent pending modification
-      const lastMod = Array.from(pendingCodeMods.values()).pop();
-      if (lastMod && lastMod.userId === message.author.id) {
-        await applyCodeModification(message, lastMod);
-        pendingCodeMods.delete(Array.from(pendingCodeMods.keys()).pop());
-        return;
-      }
-    }
-
-    if (isRejecting && message.author.id === config.creatorId && pendingCodeMods.size > 0) {
+    const isCreator = message.author.id === config.creatorId;
+    
+    // Priority 1: Handle pending code modification confirmations (creator only)
+    if (isCreator && pendingCodeMods.size > 0) {
       const lastMod = Array.from(pendingCodeMods.values()).pop();
       const lastModKey = Array.from(pendingCodeMods.keys()).pop();
       
-      // Extract feedback from message (everything after "non")
-      const feedback = message.content.replace(/^(non|nope|change|modifie|améliore)[,\s]*/i, '').trim();
+      // Check if this is a simple confirmation (just "oui", "applique", etc.)
+      const isSimpleConfirmation = /^(oui|ok|yes|applique|parfait|c'est bon|vas-y|go|👍)$/i.test(message.content.trim());
       
-      if (feedback && lastMod) {
-        // Regenerate with feedback
-        await message.channel.send('⏳ je corrige ça...');
+      if (isSimpleConfirmation && lastMod && lastMod.userId === message.author.id) {
+        await applyCodeModification(message, lastMod);
         pendingCodeMods.delete(lastModKey);
-        const newQuestion = `${lastMod.question} (CORRECTION: ${feedback})`;
-        await executeSelfModification(newQuestion, message);
-      } else {
-        // Just cancel
-        pendingCodeMods.clear();
-        await message.channel.send('ok j\'ai annulé. dis-moi ce que tu veux que je change!');
+        return;
       }
-      return;
+      
+      // Check if this is a rejection with feedback
+      const rejectMatch = message.content.match(/^(non|nope|change|modifie|améliore)[\s,:]*(.*)/i);
+      if (rejectMatch) {
+        const feedback = rejectMatch[2].trim();
+        
+        if (feedback && lastMod) {
+          // Regenerate with feedback
+          await message.channel.send('⏳ Je corrige ça...');
+          pendingCodeMods.delete(lastModKey);
+          const newQuestion = `${lastMod.question} (CORRECTION: ${feedback})`;
+          await executeSelfModification(newQuestion, message);
+          return;
+        } else {
+          // Just cancel
+          pendingCodeMods.clear();
+          await message.channel.send('❌ Annulé. Dis-moi ce que tu veux que je fasse!');
+          return;
+        }
+      }
+      
+      // If message doesn't match confirmation patterns but we have pending mods,
+      // assume user wants to skip/cancel and ask something else
+      if (lastMod && (Date.now() - lastMod.timestamp > 60000)) {
+        // Auto-clear old pending mods after 1 minute
+        pendingCodeMods.clear();
+      }
     }
 
-    // Regular AI assistant response
+    // Priority 2: Regular AI assistant response
     await handleAIAssistant(message);
     return;
   }
