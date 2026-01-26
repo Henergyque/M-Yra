@@ -2201,6 +2201,11 @@ async function handleAIAssistant(message) {
       // Get Claude response (single, natural AI)
       const assistantResponse = await getClaudeAssistantResponse(userQuestion, contextMessages + memoryContext + codeContext, isCreator);
 
+      if (!assistantResponse) {
+        await message.channel.send('❌ Erreur lors de la génération de la réponse.');
+        return;
+      }
+
       // Check if AI wants to execute an action (for creator only)
       if (isCreator) {
         // Code generation/modification
@@ -2312,7 +2317,7 @@ ${isCreator ? `Tu peux agir. Si on demande action:
 Si question sur features bot, utilise le code fourni.` : ''}`;
 
     const response = await claude.messages.create({
-      model: 'claude-3-5-sonnet-20241022',
+      model: 'claude-sonnet-4-5-20250929',
       max_tokens: 1024,
       system: systemPrompt,
       messages: [
