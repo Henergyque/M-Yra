@@ -2215,12 +2215,6 @@ async function handleAIAssistant(message) {
           await executeSelfModification(userQuestion, message);
           return;
         }
-        if (assistantResponse.includes('[[CODE_GEN]]')) {
-          const cleanResponse = assistantResponse.replace(/\[\[CODE_GEN\]\]/, '').trim();
-          if (cleanResponse) await message.channel.send(cleanResponse);
-          await executeCodeGeneration(userQuestion, message);
-          return;
-        }
 
         // Discord actions
         const deleteAction = assistantResponse.match(/\[\[DELETE:(\d+)\]\]/);
@@ -2307,14 +2301,15 @@ async function getClaudeAssistantResponse(question, context, isCreator = false) 
   try {
     const systemPrompt = `Réponds naturellement en 1-2 phrases. Pas de markdown, pas de smileys forcés.
 
-${isCreator ? `Si action demandée, utilise UN SEUL code:
+${isCreator ? `Si action demandée, utilise UN SEUL code à la fin:
 - [[DELETE:X]] pour supprimer X messages
 - [[BAN:userId]] pour ban
-- [[KICK:userId]] pour kick
+- [[KICK:userId]] pour kick  
 - [[MUTE:userId:duration]] pour mute
 - [[MONITOR:userId]] pour surveiller
-- [[CODE_MODIFY]] pour modifier le code du bot
-- [[CODE_GEN]] pour générer du code
+- [[CODE_MODIFY]] UNIQUEMENT si modification majeure du bot (nouvelle feature complexe)
+
+Ne mets JAMAIS [[CODE_GEN]]. Pour commande simple comme /hello, réponds juste "D'accord, je lance l'implémentation." puis mets [[CODE_MODIFY]].
 
 Utilise le code fourni si question sur bot.` : ''}`;
 
