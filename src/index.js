@@ -2677,20 +2677,10 @@ async function applyCodeModification(message, modInfo) {
         console.log(`✅ Code modification applied: ${modInfo.question} (Major: ${isMajorChange})`);
       } else {
         await message.channel.send('✅ Code appliqué! (Git repo non détecté)');
-        
-        // Redémarrage forcé si pas de git
-        await message.channel.send('🔄 Redémarrage du bot...');
-        await new Promise(resolve => setTimeout(resolve, 1000));
-        process.exit(1);
       }
     } catch (gitError) {
       console.warn('⚠️ Git operation failed:', gitError.message);
-      await message.channel.send('✅ Code appliqué! (Git commit échoué, fichier modifié)');
-      
-      // Redémarrage forcé si git échoue
-      await message.channel.send('🔄 Redémarrage du bot...');
-      await new Promise(resolve => setTimeout(resolve, 1000));
-      process.exit(1);
+      await message.channel.send('✅ Code appliqué! (Git commit échoué)');
     }
 
   } catch (error) {
