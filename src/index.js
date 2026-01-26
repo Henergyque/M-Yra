@@ -3381,3 +3381,4 @@ client.on('interactionCreate', async (interaction) => {
 
 await initializeDatabase();
 client.login(config.token);
+// d
