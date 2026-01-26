@@ -2664,28 +2664,34 @@ async function applyCodeModification(message, modInfo) {
             const pushCmd = getGitPushCommand(targetBranch);
             if (pushCmd) {
               execSync(`cd "${repoPath}" && ${pushCmd}`, { stdio: 'ignore' });
+              await message.channel.send(`✅ Code appliqué et poussé sur \`${targetBranch}\`! Railway va redémarrer automatiquement... 🔄`);
+            } else {
+              await message.channel.send(`✅ Code appliqué et fusionné sur \`${targetBranch}\`!`);
             }
           } catch (pushError) {
             console.warn('⚠️ Git push failed:', pushError.message);
+            await message.channel.send(`✅ Code appliqué localement (push échoué: ${pushError.message})`);
           }
-          
-          await message.channel.send(`✅ Code appliqué et fusionné automatiquement sur \`${targetBranch}\`! (Branche: \`${branchName}\`)`);
         }
         
         console.log(`✅ Code modification applied: ${modInfo.question} (Major: ${isMajorChange})`);
       } else {
         await message.channel.send('✅ Code appliqué! (Git repo non détecté)');
+        
+        // Redémarrage forcé si pas de git
+        await message.channel.send('🔄 Redémarrage du bot...');
+        await new Promise(resolve => setTimeout(resolve, 1000));
+        process.exit(1);
       }
     } catch (gitError) {
       console.warn('⚠️ Git operation failed:', gitError.message);
-      await message.channel.send('✅ Code appliqué! (Git commit échoué, mais fichier modifié)');
+      await message.channel.send('✅ Code appliqué! (Git commit échoué, fichier modifié)');
+      
+      // Redémarrage forcé si git échoue
+      await message.channel.send('🔄 Redémarrage du bot...');
+      await new Promise(resolve => setTimeout(resolve, 1000));
+      process.exit(1);
     }
-
-    // Auto-restart bot to apply changes
-    await message.channel.send('🔄 Redémarrage du bot pour appliquer les changements...');
-    setTimeout(() => {
-      process.exit(0); // Railway/Docker redémarrera automatiquement
-    }, 2000);
 
   } catch (error) {
     console.error('❌ Erreur application modification:', error);
