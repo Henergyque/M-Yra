@@ -18,6 +18,7 @@ import {
   SlashCommandBuilder,
   ThreadAutoArchiveDuration
 } from 'discord.js';
+import { customCommands, customFeatures } from './custom.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -2597,12 +2598,12 @@ INTERDICTIONS:
   }
 }
 
-// Apply approved code modification to index.js
+// Apply approved code modification to custom.js
 async function applyCodeModification(message, modInfo) {
   try {
     await message.channel.send('⏳ application de la modification...');
 
-    const filePath = './src/index.js';
+    const filePath = './src/custom.js';
     let currentCode = fs.readFileSync(filePath, 'utf-8');
 
     // Extract code from suggestion
@@ -2777,7 +2778,7 @@ async function applyApprovedInsertion(message, insertion) {
         execSync(`cd "${repoPath}" && git checkout -b ${branchName}`, { stdio: 'ignore' });
         
         // Add and commit changes
-        execSync(`cd "${repoPath}" && git add src/index.js`, { stdio: 'ignore' });
+        execSync(`cd "${repoPath}" && git add src/custom.js`, { stdio: 'ignore' });
         execSync(`cd "${repoPath}" && git commit -m "IA modification: ${insertion.question}"`, { stdio: 'ignore' });
 
         if (insertion.isMajorChange) {
