@@ -2730,7 +2730,9 @@ async function bulkDeleteMessages(message, count) {
       return;
     }
 
-    const messages = await message.channel.messages.fetch({ limit: count + 1 }); // +1 to exclude command
+    // Fetch count + 1 but cap at 100 to avoid Discord API error
+    const fetchLimit = Math.min(count + 1, 100);
+    const messages = await message.channel.messages.fetch({ limit: fetchLimit });
     const toDelete = Array.from(messages.values()).slice(1, count + 1); // Skip command message
     
     for (const msg of toDelete) {
