@@ -2152,6 +2152,22 @@ async function handleAIAssistant(message) {
         keywordMemories.slice(0, 3).map(m => `- ${m.content}`).join('\n');
     }
 
+    // === Execute Actions First (if creator) ===
+    if (isCreator) {
+      // Check if this is a direct action command with full details
+      const deleteMatch = userQuestion.match(/supprime?\s+(?:les?\s+)?(\d+)\s+(?:derniers?\s+)?messages?/i);
+      if (deleteMatch) {
+        const count = parseInt(deleteMatch[1]);
+        await bulkDeleteMessages(message, count);
+        return; // Action executed, skip AI response
+      }
+
+      // Try other direct actions (ban with mention, etc)
+      const actionExecuted = await tryExecuteAssistantAction(userQuestion, message);
+      if (actionExecuted) return; // Action executed, skip AI response
+    }
+
+    // === Regular AI Response (if no action was executed) ===
     try {
       // Get both AI responses in parallel for speed
       const [openaiResponse, grokResponse] = await Promise.all([
@@ -2162,17 +2178,77 @@ async function handleAIAssistant(message) {
       // Merge responses intelligently into one unified response
       const mergedResponse = await mergeAssistantResponses(openaiResponse, grokResponse, userQuestion);
 
+      // Check if AI wants to execute an action (for creator only)
+      if (isCreator) {
+        const deleteAction = mergedResponse.match(/\[\[DELETE:(\d+)\]\]/);
+        const banAction = mergedResponse.match(/\[\[BAN:(<@!?(\d+)>|\d+)\]\]/);
+        const kickAction = mergedResponse.match(/\[\[KICK:(<@!?(\d+)>|\d+)\]\]/);
+        const muteAction = mergedResponse.match(/\[\[MUTE:(<@!?(\d+)>|\d+):(\d+)\]\]/);
+        const monitorAction = mergedResponse.match(/\[\[MONITOR:(<@!?(\d+)>|\d+)\]\]/);
+
+        if (deleteAction) {
+          const count = parseInt(deleteAction[1]);
+          const cleanResponse = mergedResponse.replace(/\[\[DELETE:\d+\]\]/, '').trim();
+          if (cleanResponse) await message.channel.send(cleanResponse);
+          await bulkDeleteMessages(message, count);
+          return;
+        }
+        if (banAction) {
+          const userIdMatch = banAction[1].match(/\d+/);
+          const userId = userIdMatch ? userIdMatch[0] : banAction[1];
+          const cleanResponse = mergedResponse.replace(/\[\[BAN:[^\]]+\]\]/, '').trim();
+          if (cleanResponse) await message.channel.send(cleanResponse);
+          const member = await message.guild.members.fetch(userId).catch(() => null);
+          if (member) {
+            await member.ban({ reason: 'Banned by assistant' });
+          } else {
+            await message.channel.send('❌ utilisateur introuvable');
+          }
+          return;
+        }
+        if (kickAction) {
+          const userIdMatch = kickAction[1].match(/\d+/);
+          const userId = userIdMatch ? userIdMatch[0] : kickAction[1];
+          const cleanResponse = mergedResponse.replace(/\[\[KICK:[^\]]+\]\]/, '').trim();
+          if (cleanResponse) await message.channel.send(cleanResponse);
+          const member = await message.guild.members.fetch(userId).catch(() => null);
+          if (member) {
+            await member.kick('Kicked by assistant');
+          } else {
+            await message.channel.send('❌ utilisateur introuvable');
+          }
+          return;
+        }
+        if (muteAction) {
+          const userIdMatch = muteAction[1].match(/\d+/);
+          const userId = userIdMatch ? userIdMatch[0] : muteAction[1];
+          const duration = parseInt(muteAction[3]);
+          const cleanResponse = mergedResponse.replace(/\[\[MUTE:[^\]]+\]\]/, '').trim();
+          if (cleanResponse) await message.channel.send(cleanResponse);
+          const member = await message.guild.members.fetch(userId).catch(() => null);
+          if (member) {
+            await member.timeout(duration * 60 * 1000, 'Muted by assistant');
+          } else {
+            await message.channel.send('❌ utilisateur introuvable');
+          }
+          return;
+        }
+        if (monitorAction) {
+          const userIdMatch = monitorAction[1].match(/\d+/);
+          const userId = userIdMatch ? userIdMatch[0] : monitorAction[1];
+          const cleanResponse = mergedResponse.replace(/\[\[MONITOR:[^\]]+\]\]/, '').trim();
+          if (cleanResponse) await message.channel.send(cleanResponse);
+          if (!global.monitoredUsers) global.monitoredUsers = new Map();
+          global.monitoredUsers.set(userId, { channelId: message.channelId, since: new Date() });
+          return;
+        }
+      }
+
       // Split into chunks if needed (Discord 2000 char limit)
       const chunks = mergedResponse.match(/[\s\S]{1,1900}/g) || [mergedResponse];
 
       for (const chunk of chunks) {
         await message.channel.send(chunk);
-      }
-
-      // Try to execute code actions if creator
-      if (isCreator) {
-        await tryExecuteAssistantCodeGeneration(userQuestion, message);
-        await tryExecuteAssistantAction(userQuestion, message);
       }
     } catch (error) {
       console.error('❌ Erreur assistant IA:', error);
@@ -2198,7 +2274,16 @@ async function getOpenaiAssistantResponse(question, context, isCreator = false) 
 - Réponds juste à ce qu'on te demande, rien de plus
 - Pas besoin de forcer le style ou d'ajouter des emojis partout
 - Parle normalement, comme tu parlerais à quelqu'un IRL
-${executionNote}
+
+${isCreator ? `IMPORTANT: Tu peux exécuter des actions Discord. Si on te demande des actions (supprimer/bannir/mute/etc):
+- Si les détails manquent, DEMANDE des précisions naturellement ("combien?", "qui?", "combien de temps?", etc)
+- Quand tu as toutes les infos nécessaires, termine ta réponse par UN SEUL de ces codes:
+  [[DELETE:X]] pour supprimer X messages
+  [[BAN:userId]] pour bannir @userId
+  [[KICK:userId]] pour expulser @userId  
+  [[MUTE:userId:duration]] pour mute @userId pendant duration minutes
+  [[MONITOR:userId]] pour surveiller @userId
+Sois conversationnel et guide la personne.` : ''}
 
 ${context}`;
 
@@ -2233,7 +2318,12 @@ async function getGrokAssistantResponse(question, context, isCreator = false) {
 - 2-3 phrases max
 - Réponds juste ce qu'on demande
 - Parle naturellement sans forcer
-${executionNote}
+
+${isCreator ? `Tu peux faire des actions Discord. Si on te demande d'agir:
+- Manque d'infos? Demande naturellement
+- Infos complètes? Termine par:
+  [[DELETE:X]] [[BAN:userId]] [[KICK:userId]] [[MUTE:userId:duration]] [[MONITOR:userId]]
+Sois chill et aide la personne.` : ''}
 
 ${context}`;
 
@@ -2300,17 +2390,20 @@ async function tryExecuteAssistantCodeGeneration(question, message) {
     const isCodeGenRequest = /génère|genere|code|modifi|improve|fix|crée|cree|javascript|python|script|fonction|function/i.test(question);
     const isSelfModifyRequest = /modifie.*ton code|modifie.*index|change.*le bot|ajoute.*feature|rajoute/i.test(question);
 
-    if (!isCodeGenRequest) return; // Not a code request
+    if (!isCodeGenRequest) return false; // Not a code request
 
     if (isSelfModifyRequest) {
       // Self-modification request
       await executeSelfModification(question, message);
+      return true;
     } else {
       // Regular code generation
       await executeCodeGeneration(question, message);
+      return true;
     }
   } catch (error) {
     console.error('❌ Erreur génération code assistant:', error);
+    return false;
   }
 }
 
@@ -2553,7 +2646,7 @@ async function tryExecuteAssistantAction(question, message) {
       }
     }
 
-    if (!actionType) return; // No action detected
+    if (!actionType) return false; // No action detected
 
     // If creator, execute the action
     if (message.author.id === config.creatorId) {
@@ -2574,19 +2667,14 @@ async function tryExecuteAssistantAction(question, message) {
           await executeMuteAction(message, question);
           break;
       }
-      return;
+      return true; // Action executed
     }
 
-    // For non-creators, generate IA refusal response
-    const creatorMention = `<@${config.creatorId}>`;
-    const actionName = actionType === 'delete' ? 'supprimer' : 
-                      actionType === 'ban' ? 'bannir' :
-                      actionType === 'clear' ? 'nettoyer' :
-                      actionType === 'monitor' ? 'surveiller' : 'verrouiller';
-    
-    await generateAndSendRefusalResponse(message, actionName, creatorMention);
+    // For non-creators, don't respond (let AI handle it normally)
+    return false;
   } catch (error) {
     console.error('❌ Erreur exécution action assistant:', error);
+    return false;
   }
 }
 
@@ -2622,6 +2710,28 @@ Sois court, max 2-3 phrases!`;
     console.error('❌ Erreur génération refusal:', error);
     // Fallback à message hard-codé
     await message.channel.send(`tu peux demander à ${creatorMention} de faire ça, moi j'peux pas le faire directement. c'est ${creatorMention} qui me contrôle!`);
+  }
+}
+
+// Bulk delete messages
+async function bulkDeleteMessages(message, count) {
+  try {
+    if (count < 1 || count > 100) {
+      await message.channel.send('⚠️ Je peux supprimer entre 1 et 100 messages');
+      return;
+    }
+
+    const messages = await message.channel.messages.fetch({ limit: count + 1 }); // +1 to exclude command
+    const toDelete = Array.from(messages.values()).slice(1, count + 1); // Skip command message
+    
+    for (const msg of toDelete) {
+      await msg.delete().catch(() => {});
+    }
+    
+    // Pas de message de confirmation ici - c'est géré par l'IA dans sa réponse
+  } catch (error) {
+    console.error('❌ Erreur bulk delete:', error);
+    await message.channel.send('❌ Erreur lors de la suppression');
   }
 }
 
