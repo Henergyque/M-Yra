@@ -2481,23 +2481,36 @@ async function tryExecuteAssistantCodeGeneration(question, message) {
 // Generate and execute code snippets
 async function executeCodeGeneration(question, message) {
   try {
-    await message.channel.send('⏳ je génère le code...');
+    await message.channel.send('⏳ j\'analyse ce qu\'il faut changer...');
 
-    const systemPrompt = `Tu dois générer du code (JavaScript ou Python) qui répond à cette demande: "${question}"
+    // Read current bot code for context
+    const currentCode = fs.readFileSync('./src/index.js', 'utf-8');
+    
+    const systemPrompt = `Tu es un dev qui modifie le bot Discord existant.
 
-Réponds UNIQUEMENT avec le code entre \`\`\`javascript ou \`\`\`python, rien d'autre.
+CONTEXTE: Le bot existe déjà dans index.js avec toutes les imports et client setup.
 
-Exemple:
+Ta tâche: Suggérer UNIQUEMENT le code minimal à ajouter/modifier pour "${question}".
+
+Format:
 \`\`\`javascript
-console.log('hello');
+// Code à ajouter (juste les quelques lignes nécessaires)
 \`\`\`
 
-C'est tout ce qu'il faut, le code et rien d'autre!`;
+PAS DE:
+- Imports (déjà fait)
+- client.login() (déjà fait)  
+- Création du client (déjà fait)
+- Code de base existant
+
+JUSTE ce qu'il faut ajouter/modifier!`;
 
     const codeResponse = await openai.chat.completions.create({
       model: 'gpt-4o',
       messages: [
         { role: 'system', content: systemPrompt },
+        { role: 'user', content: `Code actuel (extrait):\n${currentCode.substring(0, 2000)}\n\nDemande: ${question}` }
+      ],
         { role: 'user', content: question }
       ],
       max_tokens: 2000,
@@ -2513,19 +2526,9 @@ C'est tout ce qu'il faut, le code et rien d'autre!`;
       code = codeMatch[1].trim();
     }
 
-    // Display the generated code
-    await message.channel.send(`\`\`\`\nCode généré:\n\`\`\`\n\`\`\`javascript\n${code}\n\`\`\``);
+    // Display the suggested code
+    await message.channel.send(`Code suggéré:\n\`\`\`javascript\n${code}\n\`\`\`\n\nDis-moi "oui" ou "applique" si ça te plaît! (ou "non" si tu veux que je change)`);
 
-    // Try to execute if JavaScript
-    if (code.includes('console.log') || code.includes('const') || code.includes('let') || code.includes('function')) {
-      try {
-        await message.channel.send('⏳ exécution...');
-        const result = Function(code)(); // Safe-ish execution
-        await message.channel.send(`✅ Résultat:\n\`\`\`\n${String(result)}\n\`\`\``);
-      } catch (execError) {
-        await message.channel.send(`⚠️ Erreur exécution: ${execError.message}`);
-      }
-    }
   } catch (error) {
     console.error('❌ Erreur code generation:', error);
     await message.channel.send('❌ Erreur lors de la génération du code');
@@ -2539,25 +2542,32 @@ async function executeSelfModification(question, message) {
 
     // Get current code context
     const currentCode = fs.readFileSync('./src/index.js', 'utf-8');
-    const codeLength = currentCode.length;
 
-    const systemPrompt = `Tu es un expert JavaScript Discord.js. L'utilisateur demande: "${question}"
+    const systemPrompt = `Tu modifies le bot Discord M-Yra pour: "${question}"
 
-Tu dois générer UNIQUEMENT du code JavaScript qui montre la modification à faire dans le fichier index.js du bot Discord.
+RÈGLE: Suggère UNIQUEMENT le code minimal nécessaire.
 
-Format ta réponse comme ça:
-\`\`\`
+- Petite feature/commande simple → 5-20 lignes max (juste ce qu'il faut ajouter)
+- Grosse feature complexe → Code complet si vraiment nécessaire
+
+Format:
+\`\`\`javascript
 // FONCTION À AJOUTER OU MODIFIER:
-[code complet]
+[code minimal]
 \`\`\`
 
-Important: Le code doit être compatible avec discord.js v14 et le contexte du bot M-Yra.`;
+PAS DE:
+- Imports déjà faits
+- client.login() 
+- Code déjà existant
+
+CONTEXTE: Bot discord.js v14 avec SQLite, OpenAI, Grok, Claude déjà setup.`;
 
     const modResponse = await openai.chat.completions.create({
       model: 'gpt-4o',
       messages: [
         { role: 'system', content: systemPrompt },
-        { role: 'user', content: question }
+        { role: 'user', content: `Code actuel (extrait):\n${currentCode.substring(0, 2000)}\n\nDemande: ${question}` }
       ],
       max_tokens: 2500,
       temperature: 0.7
