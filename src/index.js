@@ -2156,6 +2156,14 @@ async function handleAIAssistant(message) {
     if (isCreator) {
       // Check if this is a direct action command with full details
       const deleteMatch = userQuestion.match(/supprime?\s+(?:les?\s+)?(\d+)\s+(?:derniers?\s+)?messages?/i);
+      const deleteAllMatch = userQuestion.match(/supprime?\s+(tous?|tout|all)\s+(les?\s+)?messages?/i);
+      
+      if (deleteAllMatch) {
+        await bulkDeleteMessages(message, 100); // Max Discord permet
+        await message.channel.send('voilà j\'ai tout viré');
+        return;
+      }
+      
       if (deleteMatch) {
         const count = parseInt(deleteMatch[1]);
         await bulkDeleteMessages(message, count);
@@ -2277,8 +2285,9 @@ async function getOpenaiAssistantResponse(question, context, isCreator = false) 
 
 ${isCreator ? `IMPORTANT: Tu peux exécuter des actions Discord. Si on te demande des actions (supprimer/bannir/mute/etc):
 - Si les détails manquent, DEMANDE des précisions naturellement ("combien?", "qui?", "combien de temps?", etc)
+- Si quelqu'un dit "tous les messages" ou "tout", utilise [[DELETE:100]] (la limite max)
 - Quand tu as toutes les infos nécessaires, termine ta réponse par UN SEUL de ces codes:
-  [[DELETE:X]] pour supprimer X messages
+  [[DELETE:X]] pour supprimer X messages (max 100)
   [[BAN:userId]] pour bannir @userId
   [[KICK:userId]] pour expulser @userId  
   [[MUTE:userId:duration]] pour mute @userId pendant duration minutes
