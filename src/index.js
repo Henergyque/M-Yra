@@ -2072,7 +2072,7 @@ ${executionNote}
 Contexte de conversation précédente:
 ${context}`;
 
-    const response = await openaiClient.chat.completions.create({
+    const response = await openai.chat.completions.create({
       model: 'gpt-4o',
       messages: [
         { role: 'system', content: systemPrompt },
@@ -2113,7 +2113,7 @@ ${executionNote}
 Contexte de conversation précédente:
 ${context}`;
 
-    const response = await grokClient.chat.completions.create({
+    const response = await grok.chat.completions.create({
       model: 'grok-4-fast-reasoning',
       messages: [
         { role: 'system', content: systemPrompt },
@@ -2194,7 +2194,7 @@ console.log('hello');
 
 C'est tout ce qu'il faut, le code et rien d'autre!`;
 
-    const codeResponse = await openaiClient.chat.completions.create({
+    const codeResponse = await openai.chat.completions.create({
       model: 'gpt-4o',
       messages: [
         { role: 'system', content: systemPrompt },
@@ -2253,7 +2253,7 @@ Format ta réponse comme ça:
 
 Important: Le code doit être compatible avec discord.js v14 et le contexte du bot M-Yra.`;
 
-    const modResponse = await openaiClient.chat.completions.create({
+    const modResponse = await openai.chat.completions.create({
       model: 'gpt-4o',
       messages: [
         { role: 'system', content: systemPrompt },
@@ -2470,7 +2470,7 @@ Mentionne bien ${creatorMention} pour que cette personne reçoive une notif.
 
 Sois court, max 2-3 phrases!`;
 
-    const response = await openaiClient.chat.completions.create({
+    const response = await openai.chat.completions.create({
       model: 'gpt-4o',
       messages: [
         { role: 'system', content: systemPrompt },
