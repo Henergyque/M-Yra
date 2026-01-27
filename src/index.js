@@ -2201,7 +2201,7 @@ async function handleAIAssistant(message) {
       }
 
       // Get Claude response (single, natural AI)
-      const assistantResponse = await getClaudeAssistantResponse(userQuestion, contextMessages + memoryContext + codeContext, isCreator);
+      const assistantResponse = await getClaudeAssistantResponse(userQuestion, contextMessages + memoryContext + codeContext, isCreator, message.author.id, message);
 
       if (!assistantResponse) {
         await message.channel.send('❌ Erreur lors de la génération de la réponse.');
@@ -2297,9 +2297,142 @@ async function handleAIAssistant(message) {
     console.error('❌ Erreur assistant:', error);
   }
 }
+// Load recent conversation history from memories table
+async function loadConversationHistory(userId, limit = 10) {
+  try {
+    const rows = await new Promise((resolve, reject) => {
+      db.all(
+        `SELECT content FROM memories 
+         WHERE user_id = ? AND type = 'conversation' 
+         ORDER BY created_at DESC LIMIT ?`,
+        [userId, limit],
+        (err, rows) => {
+          if (err) reject(err);
+          else resolve(rows || []);
+        }
+      );
+    });
+    return rows.reverse(); // Return oldest first
+  } catch (error) {
+    console.error('❌ Erreur chargement historique:', error);
+    return [];
+  }
+}
+
+// Load all members context (names, IDs, recent activity)
+async function loadMembersContext(guild) {
+  try {
+    if (!guild) return '';
+    
+    const members = await guild.members.fetch({ limit: 100 }).catch(() => null);
+    if (!members) return '';
+    
+    let membersInfo = '**Membres du serveur:**\n';
+    for (const [id, member] of members) {
+      const username = member.user.username;
+      const isCreator = id === config.creatorId ? ' 👑 (créatrice)' : '';
+      membersInfo += `- ${username} (ID: ${id})${isCreator}\n`;
+    }
+    return membersInfo;
+  } catch (error) {
+    console.error('❌ Erreur chargement contexte membres:', error);
+    return '';
+  }
+}
+
+// Load vannes/jokes context (who made fun of who)
+async function loadVannesContext(userId, limit = 5) {
+  try {
+    const rows = await new Promise((resolve, reject) => {
+      db.all(
+        `SELECT content FROM memories 
+         WHERE type = 'vanne' AND (user_id = ? OR subject LIKE ?)
+         ORDER BY created_at DESC LIMIT ?`,
+        [userId, `%${userId}%`, limit],
+        (err, rows) => {
+          if (err) reject(err);
+          else resolve(rows || []);
+        }
+      );
+    });
+    
+    if (rows.length === 0) return '';
+    
+    let vannesInfo = '**Vannes/blagues mémorables:**\n';
+    for (const row of rows) {
+      try {
+        const vanne = JSON.parse(row.content);
+        vannesInfo += `- ${vanne.from} → ${vanne.to}: "${vanne.text}"\n`;
+      } catch {
+        // Skip malformed
+      }
+    }
+    return vannesInfo;
+  } catch (error) {
+    console.error('❌ Erreur chargement vannes:', error);
+    return '';
+  }
+}
+
+// Save conversation exchange to memory with enriched context
+async function saveConversationMemory(userId, userMessage, assistantResponse, channelId = null, mentionedUsers = []) {
+  try {
+    const timestamp = new Date().toISOString();
+    
+    // Extract mentions from message
+    const mentions = mentionedUsers.length > 0 ? mentionedUsers.map(u => `${u.username}(${u.id})`).join(', ') : 'none';
+    
+    // Create enriched content with metadata
+    const userContent = JSON.stringify({
+      role: 'user',
+      content: userMessage,
+      channelId,
+      mentions,
+      timestamp
+    });
+    
+    const assistantContent = JSON.stringify({
+      role: 'assistant',
+      content: assistantResponse,
+      timestamp
+    });
+    
+    // Save user message
+    await runQuery(
+      `INSERT INTO memories (type, subject, user_id, content, created_at, created_by) 
+       VALUES (?, ?, ?, ?, ?, ?)`,
+      ['conversation', `channel:${channelId}`, userId, userContent, timestamp, userId]
+    );
+    
+    // Save assistant response
+    await runQuery(
+      `INSERT INTO memories (type, subject, user_id, content, created_at, created_by) 
+       VALUES (?, ?, ?, ?, ?, ?)`,
+      ['conversation', `channel:${channelId}`, userId, assistantContent, timestamp, 'claude']
+    );
+    
+    // If message contains a vanne/joke pattern, save it separately
+    if (/\b(mdr|lol|haha|ptdr|t.*con|débile|con|nul|pourri|trash|débeuler)\b/i.test(userMessage)) {
+      const vanneContent = JSON.stringify({
+        from: userId,
+        to: mentionedUsers.length > 0 ? mentionedUsers[0].id : 'channel',
+        text: userMessage,
+        timestamp
+      });
+      
+      await runQuery(
+        `INSERT INTO memories (type, subject, user_id, content, created_at, created_by) 
+         VALUES (?, ?, ?, ?, ?, ?)`,
+        ['vanne', 'joke', userId, vanneContent, timestamp, userId]
+      );
+    }
+  } catch (error) {
+    console.error('❌ Erreur sauvegarde mémoire:', error);
+  }
+}
 
 // Get Claude response for assistant (natural, human tone)
-async function getClaudeAssistantResponse(question, context, isCreator = false) {
+async function getClaudeAssistantResponse(question, context, isCreator = false, userId = null, message = null) {
   try {
     const systemPrompt = `Réponds naturellement et un peu amicalement en 1-2 phrases. Pas trop formel, mais reste utile.
 
@@ -2307,8 +2440,14 @@ async function getClaudeAssistantResponse(question, context, isCreator = false) 
 - Une légère touche d'amabilité, sans exagérer
 - Pas de markdown forcé
 - Sois confiant et clair
+- Tu te souviens des gens et de leurs vannes/blagues
 
-${isCreator ? `Si action demandée, utilise UN SEUL code à la fin:
+${isCreator ? `**Tu dois savoir:**
+- La créatrice (creatorId: ${config.creatorId}) t'a créée et tu la respectes/adores
+- Tu peux reconnaître les IDs membres et channels
+- Tu prends en compte l'historique des vannes entre membres pour comprendre les dynamiques
+
+Si action demandée, utilise UN SEUL code à la fin:
 - [[DELETE:X]] pour supprimer X messages
 - [[BAN:userId]] pour ban
 - [[KICK:userId]] pour kick  
@@ -2320,19 +2459,55 @@ Ne mets JAMAIS [[CODE_GEN]]. Pour commande simple comme /hello, réponds juste "
 
 Utilise le code fourni si question sur bot.` : ''}`;
 
+    // Build enriched context
+    const messages = [];
+    let enrichedContext = context;
+    
+    if (userId && message && message.guild) {
+      // Load members info
+      const membersContext = await loadMembersContext(message.guild);
+      enrichedContext += '\n\n' + membersContext;
+      
+      // Load vannes context
+      const vannesContext = await loadVannesContext(userId, 5);
+      if (vannesContext) {
+        enrichedContext += '\n\n' + vannesContext;
+      }
+      
+      // Load conversation history
+      const history = await loadConversationHistory(userId, 8);
+      for (const entry of history) {
+        try {
+          const parsed = JSON.parse(entry.content);
+          messages.push(parsed);
+        } catch {
+          // Skip malformed entries
+        }
+      }
+    }
+
+    // Add current message
+    messages.push({
+      role: 'user',
+      content: `${enrichedContext}\n\nUtilisateur: ${question}`
+    });
+
     const response = await claude.messages.create({
       model: 'claude-sonnet-4-5-20250929',
       max_tokens: 1024,
       system: systemPrompt,
-      messages: [
-        {
-          role: 'user',
-          content: `${context}\n\nUtilisateur: ${question}`
-        }
-      ]
+      messages: messages
     });
 
-    return response.content[0].text;
+    const assistantResponse = response.content[0].text;
+
+    // Save conversation to memory if userId provided
+    if (userId && message) {
+      const mentionedUsers = message.mentions.users.map(u => ({ username: u.username, id: u.id })) || [];
+      await saveConversationMemory(userId, question, assistantResponse, message.channelId, mentionedUsers);
+    }
+
+    return assistantResponse;
   } catch (error) {
     console.error('❌ Erreur Claude assistant:', error);
     return null;
