@@ -2818,7 +2818,7 @@ async function calculateEmotionFromPerformance(model, selfRating, latency) {
 async function recordEmotion(model, emotionType, intensity, triggerEvent, durationMinutes) {
   try {
     await runQuery(
-      `INSERT INTO brain_emotions (model, emotion_type, intensity, trigger_event, duration_minutes, timestamp)
+      `INSERT INTO brain_emotions (model, emotion_type, intensity, trigger_event, duration_minutes, created_at)
        VALUES (?, ?, ?, ?, ?, ?)`,
       [model, emotionType, intensity, triggerEvent, durationMinutes, new Date().toISOString()]
     );
@@ -2827,7 +2827,7 @@ async function recordEmotion(model, emotionType, intensity, triggerEvent, durati
     await runQuery(
       `DELETE FROM brain_emotions 
        WHERE model = ? 
-       AND datetime(timestamp) < datetime('now', '-24 hours')`,
+       AND datetime(created_at) < datetime('now', '-24 hours')`,
       [model]
     );
   } catch (error) {
@@ -2840,18 +2840,18 @@ async function updateMood(model) {
     // Calcule l'humeur globale basée sur les émotions récentes
     const recentEmotions = await allQuery(
       `SELECT emotion_type, intensity, 
-              (julianday('now') - julianday(timestamp)) * 24 * 60 as age_minutes
+              (julianday('now') - julianday(created_at)) * 24 * 60 as age_minutes
        FROM brain_emotions 
        WHERE model = ? 
-       AND datetime(timestamp) > datetime('now', '-6 hours')
-       ORDER BY timestamp DESC`,
+       AND datetime(created_at) > datetime('now', '-6 hours')
+       ORDER BY created_at DESC`,
       [model]
     );
 
     if (recentEmotions.length === 0) {
       // Humeur neutre si pas d'émotions récentes
       await runQuery(
-        `INSERT OR REPLACE INTO brain_mood (model, current_mood, mood_score, factors, updated_at)
+        `INSERT OR REPLACE INTO brain_mood (model, current_mood, mood_score, factors, last_update)
          VALUES (?, 'neutre', 0.5, 'Pas d\'émotions récentes', ?)`,
         [model, new Date().toISOString()]
       );
@@ -2900,7 +2900,7 @@ async function updateMood(model) {
       .join(', ');
 
     await runQuery(
-      `INSERT OR REPLACE INTO brain_mood (model, current_mood, mood_score, factors, updated_at)
+      `INSERT OR REPLACE INTO brain_mood (model, current_mood, mood_score, factors, last_update)
        VALUES (?, ?, ?, ?, ?)`,
       [model, currentMood, moodScore, dominantEmotions, new Date().toISOString()]
     );
@@ -3037,8 +3037,8 @@ async function getBrainKnowledge(model) {
     const recentEmotions = await allQuery(
       `SELECT * FROM brain_emotions 
        WHERE model = ? 
-       AND datetime(timestamp) > datetime('now', '-1 hour')
-       ORDER BY timestamp DESC 
+       AND datetime(created_at) > datetime('now', '-1 hour')
+       ORDER BY created_at DESC 
        LIMIT 15`,
       [model]
     );
@@ -3047,7 +3047,7 @@ async function getBrainKnowledge(model) {
     const currentMood = await getQuery(
       `SELECT * FROM brain_mood 
        WHERE model = ? 
-       ORDER BY updated_at DESC 
+       ORDER BY last_update DESC 
        LIMIT 1`,
       [model]
     );
