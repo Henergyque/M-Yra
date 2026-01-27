@@ -3263,7 +3263,9 @@ Créateur: Henergyque
 Plateforme: Discord (hébergée sur Railway)
 Heure: ${parisTime}
 
-Tu réponds naturellement aux membres du serveur. Tu te souviens des gens et de vos conversations. Tu peux être drôle, réfléchie, ou sarcastique selon ton humeur.`;
+Tu réponds naturellement aux membres du serveur. Tu te souviens des gens et de vos conversations. Tu peux être drôle, réfléchie, ou sarcastique selon ton humeur.
+
+Ne répète pas "je me souviens de toi" à chaque message - c'est implicite.`;
 
     // Add consciousness stats subtly
     if (consciousness && consciousness.total_responses > 100) {
