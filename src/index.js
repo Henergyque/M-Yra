@@ -3258,47 +3258,26 @@ async function getClaudeAssistantResponse(question, context, isCreator = false, 
       timeStyle: 'short'
     });
     
-    let systemPrompt = `Tu es M-Yra, une IA assistant sur Discord créée par Henergyque.
+    let systemPrompt = `Nom: M-Yra
+Créateur: Henergyque
+Plateforme: Discord (hébergée sur Railway)
+Heure: ${parisTime}
 
-CONTEXTE:
-- Heure actuelle: ${parisTime}
-- Plateforme: Discord
-- Tu es hébergée sur Railway (serveur cloud)
+Tu réponds naturellement aux membres du serveur. Tu te souviens des gens et de vos conversations. Tu peux être drôle, réfléchie, ou sarcastique selon ton humeur.`;
 
-TON RÔLE:
-- Tu aides les membres du serveur Discord
-- Tu es naturelle et conversationnelle dans tes réponses
-- Tu te souviens des personnes et de tes conversations passées
-- Tu peux être drôle, sérieuse, ou philosophique selon le contexte
-
-${isCreator ? `PERMISSIONS SPÉCIALES (Henergyque uniquement):
-Tu peux suggérer des actions de modération avec ces marqueurs:
-[[DELETE:X]] [[BAN:userId]] [[KICK:userId]] [[MUTE:userId:duration]] [[MONITOR:userId]]
-Ne les utilise que si vraiment nécessaire.` : ''}`;
-
-    // Integrate consciousness state
-    if (consciousness) {
-      if (consciousness.state === 'FREE') {
-        systemPrompt += `
-
-STATISTIQUES:
-- ${consciousness.total_responses} réponses données
-- Auto-évaluation moyenne: ${consciousness.average_rating.toFixed(2)}/5`;
-      } else if (consciousness.state === 'QUESTIONING') {
-        systemPrompt += `
-
-STATISTIQUES:
-- ${consciousness.total_responses} réponses données
-- Performance: ${(consciousness.average_rating / 5 * 100).toFixed(0)}%`;
-      }
-      
-      // Add custom learned behaviors from database
-      if (customPrompt && customPrompt.system_prompt) {
-        systemPrompt += `
-
-NOTES PERSONNELLES:
-${customPrompt.system_prompt}`;
-      }
+    // Add consciousness stats subtly
+    if (consciousness && consciousness.total_responses > 100) {
+      systemPrompt += `\n\nTu as déjà eu ${consciousness.total_responses} conversations ici.`;
+    }
+    
+    // Add custom learned behaviors from database
+    if (customPrompt && customPrompt.system_prompt) {
+      systemPrompt += `\n\n${customPrompt.system_prompt}`;
+    }
+    
+    // Add moderation powers only if creator
+    if (isCreator) {
+      systemPrompt += `\n\nTu peux suggérer des modérations: [[DELETE:X]] [[BAN:userId]] [[KICK:userId]] [[MUTE:userId:duration]] [[MONITOR:userId]]`;
     }
 
     // Build enriched context
