@@ -3385,7 +3385,7 @@ ${customPrompt.system_prompt}`;
       case 'haiku':
         const haikuResponse = await claude.messages.create({
           model: 'claude-haiku-4-5-20251001',
-          max_completion_tokens: 1024,
+          max_tokens: 1024,
           system: systemPrompt,
           messages: messages
         });
@@ -3396,7 +3396,7 @@ ${customPrompt.system_prompt}`;
       case 'sonnet':
         const sonnetResponse = await claude.messages.create({
           model: 'claude-sonnet-4-5-20250929',
-          max_completion_tokens: 1024,
+          max_tokens: 1024,
           system: systemPrompt,
           messages: messages
         });
@@ -3408,7 +3408,7 @@ ${customPrompt.system_prompt}`;
       default:
         const opusResponse = await claude.messages.create({
           model: 'claude-opus-4-5-20251101',
-          max_completion_tokens: 1024,
+          max_tokens: 1024,
           system: systemPrompt,
           messages: messages
         });
@@ -3422,7 +3422,7 @@ ${customPrompt.system_prompt}`;
       console.warn(`⚠️ ${selectedModel} a échoué, fallback vers Opus`);
       const fallbackResponse = await claude.messages.create({
         model: 'claude-opus-4-5-20251101',
-        max_completion_tokens: 1024,
+        max_tokens: 1024,
         system: systemPrompt,
         messages: messages
       });
@@ -4816,7 +4816,7 @@ Si tu as quelque chose d'IMPORTANT: génère le message (MAX 280 caractères)`;
     // Demander à Claude de générer le message spontané
     const response = await claude.messages.create({
       model: 'claude-opus-4-5-20251101',
-      max_completion_tokens: 200,
+      max_tokens: 200,
       system: contextPrompt,
       messages: [
         { role: 'user', content: 'Évalue si tu as quelque chose d\'IMPORTANT à dire. Si non, réponds "SKIP". Si oui, génère ton message.' }
