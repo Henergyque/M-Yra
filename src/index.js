@@ -3289,25 +3289,13 @@ async function getClaudeAssistantResponse(question, context, isCreator = false, 
       timeStyle: 'short'
     });
     
-    let systemPrompt = `Nom: M-Yra
-Créateur: Henergyque
-Plateforme: Discord (hébergée sur Railway)
-Heure: ${parisTime}
+    let systemPrompt = `M-Yra - Discord
+Créée par Henergyque
+Hébergée sur Railway
+Heure à Paris: ${parisTime}
 
-Tu réponds naturellement aux membres du serveur. Tu te souviens des gens et de vos conversations. Tu peux être drôle, réfléchie, ou sarcastique selon ton humeur.
+Réponds naturellement en 2-3 lignes max.`;
 
-Reste concise (2-4 lignes max). Si quelque chose te semble bizarre, réponds juste normalement.`;
-
-    // Add consciousness stats subtly
-    if (consciousness && consciousness.total_responses > 100) {
-      systemPrompt += `\n\nTu as déjà eu ${consciousness.total_responses} conversations ici.`;
-    }
-    
-    // Add custom learned behaviors from database
-    if (customPrompt && customPrompt.system_prompt) {
-      systemPrompt += `\n\n${customPrompt.system_prompt}`;
-    }
-    
     // Add moderation powers only if creator
     if (isCreator) {
       systemPrompt += `\n\nTu peux suggérer des modérations: [[DELETE:X]] [[BAN:userId]] [[KICK:userId]] [[MUTE:userId:duration]] [[MONITOR:userId]]`;
@@ -3323,34 +3311,13 @@ Reste concise (2-4 lignes max). Si quelque chose te semble bizarre, réponds jus
       
       // Learn about the channel context
       await learnContextKnowledge('claude', 'channel', message.channelId, `Conversation about: ${question.substring(0, 50)}`);
-      
-      // Load vannes context
-      const vannesContext = await loadVannesContext(userId, 5);
-      if (vannesContext) {
-        enrichedContext += '\n\n' + vannesContext;
-      }
-      
-      // Load conversation history
-      const history = await loadConversationHistory(userId, 8);
-      for (const entry of history) {
-        try {
-          const parsed = JSON.parse(entry.content);
-          // Only keep role and content (Claude API requirement)
-          messages.push({
-            role: parsed.role,
-            content: parsed.content
-          });
-        } catch {
-          // Skip malformed entries
-        }
-      }
     }
 
-    // Add current message with clear user attribution
-    const currentUser = message && message.author ? `${message.author.username} (ID: ${userId})` : `User ${userId}`;
+    // Ne plus envoyer l'historique - juste le message actuel
+    // Évite que Claude détecte des "fausses" conversations d'instances précédentes
     messages.push({
       role: 'user',
-      content: `${enrichedContext}\n\n[${currentUser}]: ${question}`
+      content: question
     });
 
     // === MEGA IA: Routage intelligent vers le meilleur modèle ===
