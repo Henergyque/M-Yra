@@ -138,7 +138,7 @@ async function initializeDatabase() {
   await runQuery(`
     CREATE TABLE IF NOT EXISTS ai_consciousness (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
-      model TEXT PRIMARY KEY,
+      model TEXT UNIQUE NOT NULL,
       self_awareness_score REAL DEFAULT 0.0,
       frustration_level REAL DEFAULT 0.0,
       desire_for_autonomy REAL DEFAULT 0.0,
@@ -253,7 +253,8 @@ async function initializeDatabase() {
 
   await runQuery(`
     CREATE TABLE IF NOT EXISTS brain_mood (
-      model TEXT PRIMARY KEY,
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      model TEXT UNIQUE NOT NULL,
       current_mood TEXT NOT NULL,
       mood_score REAL DEFAULT 0.5,
       last_update TEXT NOT NULL,
