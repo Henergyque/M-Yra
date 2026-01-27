@@ -2489,7 +2489,11 @@ Utilise le code fourni si question sur bot.` : ''}`;
       for (const entry of history) {
         try {
           const parsed = JSON.parse(entry.content);
-          messages.push(parsed);
+          // Only keep role and content (Claude API requirement)
+          messages.push({
+            role: parsed.role,
+            content: parsed.content
+          });
         } catch {
           // Skip malformed entries
         }
