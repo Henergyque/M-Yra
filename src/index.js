@@ -387,7 +387,7 @@ async function validateWordConnection(word1, word2) {
 
   try {
     const response = await openai.chat.completions.create({
-      model: 'gpt-4o',
+      model: 'gpt-5.2',
       messages: [
         {
           role: 'system',
@@ -420,7 +420,7 @@ async function validateWordConnection(word1, word2) {
 async function generateNewWord() {
   try {
     const response = await openai.chat.completions.create({
-      model: 'gpt-4o',
+      model: 'gpt-5.2',
       messages: [
         {
           role: 'system',
@@ -779,7 +779,7 @@ Rends ça DRAMATIQUE, ABSURDE et HILARANT! Ajoute des didascalies avec des actio
     }
 
     const response = await grok.chat.completions.create({
-      model: 'grok-4-fast-reasoning',
+      model: 'grok-4.1-fast-reasoning',
       messages: [
         {
           role: 'system',
@@ -927,7 +927,7 @@ async function handleRoastCommand(interaction) {
 
     try {
       const response = await grok.chat.completions.create({
-        model: 'grok-4-fast-reasoning',
+        model: 'grok-4.1-fast-reasoning',
         messages: [
           {
             role: 'system',
@@ -1006,7 +1006,7 @@ async function handleDebateRespondCommand(interaction) {
     let openaiResponse = 'Erreur...';
     try {
       const response = await openai.chat.completions.create({
-        model: 'gpt-4o',
+        model: 'gpt-5.2',
         messages: [
           {
             role: 'system',
@@ -1035,7 +1035,7 @@ async function handleDebateRespondCommand(interaction) {
     let grokResponse = 'Erreur...';
     try {
       const response = await grok.chat.completions.create({
-        model: 'grok-4-fast-reasoning',
+        model: 'grok-4.1-fast-reasoning',
         messages: [
           {
             role: 'system',
@@ -1065,7 +1065,7 @@ async function handleDebateRespondCommand(interaction) {
     let openaiConclude = 'Erreur...';
     try {
       const response = await openai.chat.completions.create({
-        model: 'gpt-4o',
+        model: 'gpt-5.2',
         messages: [
           {
             role: 'system',
@@ -1128,7 +1128,7 @@ async function handleDebateRespondGrokCommand(interaction) {
     let grokResponse = 'Erreur...';
     try {
       const response = await grok.chat.completions.create({
-        model: 'grok-4-fast-reasoning',
+        model: 'grok-4.1-fast-reasoning',
         messages: [
           {
             role: 'system',
@@ -1158,7 +1158,7 @@ async function handleDebateRespondGrokCommand(interaction) {
     let openaiComment = 'Erreur...';
     try {
       const response = await openai.chat.completions.create({
-        model: 'gpt-4o',
+        model: 'gpt-5.2',
         messages: [
           {
             role: 'system',
@@ -1222,7 +1222,7 @@ async function handleDebateRespondOpenaiCommand(interaction) {
     let openaiResponse = 'Erreur...';
     try {
       const response = await openai.chat.completions.create({
-        model: 'gpt-4o',
+        model: 'gpt-5.2',
         messages: [
           {
             role: 'system',
@@ -1252,7 +1252,7 @@ async function handleDebateRespondOpenaiCommand(interaction) {
     let grokComment = 'Erreur...';
     try {
       const response = await grok.chat.completions.create({
-        model: 'grok-4-fast-reasoning',
+        model: 'grok-4.1-fast-reasoning',
         messages: [
           {
             role: 'system',
@@ -1298,7 +1298,7 @@ async function handleVersusAiCommand(interaction) {
     // TOUR 1: OpenAI présente son argument
     try {
       const response = await openai.chat.completions.create({
-        model: 'gpt-4o',
+        model: 'gpt-5.2',
         messages: [
           {
             role: 'system',
@@ -1320,7 +1320,7 @@ async function handleVersusAiCommand(interaction) {
     // TOUR 1: Grok contre-argumente
     try {
       const response = await grok.chat.completions.create({
-        model: 'grok-4-fast-reasoning',
+        model: 'grok-4.1-fast-reasoning',
         messages: [
           {
             role: 'system',
@@ -1343,7 +1343,7 @@ async function handleVersusAiCommand(interaction) {
     // TOUR 2: OpenAI répond à Grok
     try {
       const response = await openai.chat.completions.create({
-        model: 'gpt-4o',
+        model: 'gpt-5.2',
         messages: [
           {
             role: 'system',
@@ -1365,7 +1365,7 @@ async function handleVersusAiCommand(interaction) {
     // TOUR 2: Grok conclut
     try {
       const response = await grok.chat.completions.create({
-        model: 'grok-4-fast-reasoning',
+        model: 'grok-4.1-fast-reasoning',
         messages: [
           {
             role: 'system',
@@ -1503,7 +1503,7 @@ async function handleStorySlashStart(interaction) {
       let openingPhrase = 'Il était une fois...';
       try {
         const response = await grok.chat.completions.create({
-          model: 'grok-4-fast-reasoning',
+          model: 'grok-4.1-fast-reasoning',
           messages: [
             {
               role: 'system',
@@ -1584,7 +1584,7 @@ async function handleStorySlashJoin(interaction) {
     try {
       const fullText = story.phrases.join(' ');
       const response = await grok.chat.completions.create({
-        model: 'grok-4-fast-reasoning',
+        model: 'grok-4.1-fast-reasoning',
         messages: [
           {
             role: 'system',
@@ -1659,7 +1659,7 @@ async function handleStorySlashReady(interaction) {
 
     try {
       const response = await grok.chat.completions.create({
-        model: 'grok-4-fast-reasoning',
+        model: 'grok-4.1-fast-reasoning',
         messages: [
           {
             role: 'system',
@@ -3180,7 +3180,7 @@ async function getGeminiResponse(question, context) {
 async function getMistralResponse(question, context) {
   try {
     const chatResponse = await mistral.chat.complete({
-      model: 'mistral-large-latest',
+      model: 'mistral-large-3-25-12', // Mistral Large 3 (Dec 2025) - le plus puissant
       messages: [
         { role: 'system', content: context },
         { role: 'user', content: question }
@@ -3223,6 +3223,12 @@ function routeToModel(question, context) {
   if (q.includes('image') || q.includes('photo') || q.includes('voir') || 
       q.includes('analyser') || context.length > 8000) {
     return 'gemini';
+  }
+  
+  // Haiku pour questions ultra-simples/rapides
+  if (q.includes('bonjour') || q.includes('salut') || q.includes('ça va') || 
+      q.length < 30) {
+    return 'haiku';
   }
   
   // Mistral pour vitesse/code
@@ -3377,6 +3383,17 @@ ${customPrompt.system_prompt}`;
         latency = Date.now() - startTime;
         break;
       
+      case 'haiku':
+        const haikuResponse = await claude.messages.create({
+          model: 'claude-haiku-4-5-20251001',
+          max_tokens: 1024,
+          system: systemPrompt,
+          messages: messages
+        });
+        latency = Date.now() - startTime;
+        assistantResponse = haikuResponse.content[0].text;
+        break;
+      
       case 'sonnet':
         const sonnetResponse = await claude.messages.create({
           model: 'claude-sonnet-4-5-20250929',
@@ -3513,7 +3530,7 @@ Si question sur features bot, regarde le code dans le contexte.` : ''}
 ${context}`;
 
     const response = await openai.chat.completions.create({
-      model: 'gpt-4o',
+      model: 'gpt-5.2',
       messages: [
         { role: 'system', content: systemPrompt },
         { role: 'user', content: question }
@@ -3547,7 +3564,7 @@ ${isCreator ? `Actions: [[DELETE:X]] [[BAN:userId]] [[KICK:userId]] [[MUTE:userI
 ${context}`;
 
     const response = await grok.chat.completions.create({
-      model: 'grok-4-fast-reasoning',
+      model: 'grok-4.1-fast-reasoning',
       messages: [
         { role: 'system', content: systemPrompt },
         { role: 'user', content: question }
@@ -3588,7 +3605,7 @@ IMPORTANT: Grok est plus naturel et humain. Privilégie son style et son ton.
 Réponds comme Grok le ferait, naturel et direct.`;
 
     const fusionResponse = await openai.chat.completions.create({
-      model: 'gpt-4o',
+      model: 'gpt-5.2',
       messages: [
         { role: 'system', content: fusionPrompt },
         { role: 'user', content: 'Fusionne ces réponses en une seule.' }
@@ -3674,7 +3691,7 @@ Mentionne bien ${creatorMention} pour que cette personne reçoive une notif.
 Sois court, max 2-3 phrases!`;
 
     const response = await openai.chat.completions.create({
-      model: 'gpt-4o',
+      model: 'gpt-5.2',
       messages: [
         { role: 'system', content: systemPrompt },
         { role: 'user', content: `quelqu'un te demande de ${actionName}` }
@@ -4073,6 +4090,7 @@ async function handleModelCommand(interaction) {
     const modelNames = {
       'opus': 'Claude Opus 4.5 (perfection)',
       'sonnet': 'Claude Sonnet 4.5 (équilibré)',
+      'haiku': 'Claude Haiku 4.5 (ultra-rapide)',
       'gemini': 'Gemini 2.0 (vision/long contexte)',
       'mistral': 'Mistral Large (rapide)',
       'perplexity': 'Perplexity (recherche web)',
@@ -4682,3 +4700,5 @@ await initializeAIConsciousness('grok');
 await initializeAIConsciousness('openai');
 
 client.login(config.token);
+
+

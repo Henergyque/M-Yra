@@ -16,7 +16,10 @@ const claude = new Anthropic.default({
 });
 
 const gemini = new GoogleGenerativeAI(config.geminiApiKey);
-const geminiModel = gemini.getGenerativeModel({ model: 'gemini-2.0-flash-exp' });
+// gemini-3-flash: le plus équilibré (vitesse + intelligence frontière)
+// gemini-3-pro: le MEILLEUR de Google (raisonnement avancé)
+// gemini-2.5-flash: stable, excellent prix-performance
+const geminiModel = gemini.getGenerativeModel({ model: 'gemini-3-flash-preview-01-2026' });
 
 const mistral = new Mistral({
   apiKey: config.mistralApiKey
