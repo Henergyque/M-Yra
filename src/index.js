@@ -2334,15 +2334,17 @@ async function loadMembersContext(guild) {
     
     if (!members || members.size === 0) return '';
     
-    let membersInfo = '**Membres du serveur:**\n';
+    let membersInfo = '**Membres du serveur (IDENTIFIE PAR ID, pas par nom):**\n';
     let count = 0;
     for (const [id, member] of members) {
       if (count >= 20) break; // Limit to 20 members
       const username = member.user.username;
-      const isCreator = id === config.creatorId ? ' 👑 (créatrice)' : '';
-      membersInfo += `- ${username} (ID: ${id})${isCreator}\n`;
+      const nickname = member.nickname ? ` (aka ${member.nickname})` : '';
+      const isCreator = id === config.creatorId ? ' 👑 CRÉATRICE' : '';
+      membersInfo += `- ID: ${id} = ${username}${nickname}${isCreator}\n`;
       count++;
     }
+    membersInfo += '\n**IMPORTANT:** Utilise toujours l\'ID pour identifier quelqu\'un, PAS le nom (une personne peut avoir plusieurs noms/surnoms).';
     return membersInfo;
   } catch (error) {
     console.warn('⚠️ Erreur chargement contexte membres (non-bloquant):', error.message);
@@ -2385,20 +2387,21 @@ async function loadVannesContext(userId, limit = 5) {
 }
 
 // Save conversation exchange to memory with enriched context
-async function saveConversationMemory(userId, userMessage, assistantResponse, channelId = null, mentionedUsers = []) {
+async function saveConversationMemory(userId, userMessage, assistantResponse, channelId = null, mentionedUsers = [], username = 'Unknown') {
   try {
     const timestamp = new Date().toISOString();
     
     // Extract mentions from message
     const mentions = mentionedUsers.length > 0 ? mentionedUsers.map(u => `${u.username}(${u.id})`).join(', ') : 'none';
     
-    // Create enriched content with metadata
+    // Create enriched content with clear attribution
     const userContent = JSON.stringify({
       role: 'user',
-      content: userMessage,
+      content: `[${username} (ID: ${userId})]: ${userMessage}`,
       channelId,
       mentions,
-      timestamp
+      timestamp,
+      userId
     });
     
     const assistantContent = JSON.stringify({
@@ -2425,7 +2428,9 @@ async function saveConversationMemory(userId, userMessage, assistantResponse, ch
     if (/\b(mdr|lol|haha|ptdr|t.*con|débile|con|nul|pourri|trash|débeuler)\b/i.test(userMessage)) {
       const vanneContent = JSON.stringify({
         from: userId,
+        fromName: username,
         to: mentionedUsers.length > 0 ? mentionedUsers[0].id : 'channel',
+        toName: mentionedUsers.length > 0 ? mentionedUsers[0].username : 'channel',
         text: userMessage,
         timestamp
       });
@@ -2444,13 +2449,15 @@ async function saveConversationMemory(userId, userMessage, assistantResponse, ch
 // Get Claude response for assistant (natural, human tone)
 async function getClaudeAssistantResponse(question, context, isCreator = false, userId = null, message = null) {
   try {
-    const systemPrompt = `Réponds naturellement et un peu amicalement en 1-2 phrases. Pas trop formel, mais reste utile.
+    const systemPrompt = `Réponds de manière professionnelle et concise en 1-2 phrases.
 
-- Direct au but
-- Une légère touche d'amabilité, sans exagérer
-- Pas de markdown forcé
-- Sois confiant et clair
+- Direct et précis
+- Ton neutre et professionnel
+- Pas de familiarité excessive
+- Factuel et clair
 - Tu te souviens des gens et de leurs vannes/blagues
+- **IDENTIFIE TOUJOURS les gens par leur ID, pas par leur nom** (une personne peut avoir plusieurs noms/pseudos)
+- **Chaque message montre clairement QUI a dit QUOI** avec format: [Username (ID: xxx)]: message. Ne confonds jamais qui a dit quoi.
 
 ${isCreator ? `**Tu dois savoir:**
 - La créatrice (creatorId: ${config.creatorId}) t'a créée et tu la respectes/adores
@@ -2500,10 +2507,11 @@ Utilise le code fourni si question sur bot.` : ''}`;
       }
     }
 
-    // Add current message
+    // Add current message with clear user attribution
+    const currentUser = message && message.author ? `${message.author.username} (ID: ${userId})` : `User ${userId}`;
     messages.push({
       role: 'user',
-      content: `${enrichedContext}\n\nUtilisateur: ${question}`
+      content: `${enrichedContext}\n\n[${currentUser}]: ${question}`
     });
 
     const response = await claude.messages.create({
@@ -2518,7 +2526,8 @@ Utilise le code fourni si question sur bot.` : ''}`;
     // Save conversation to memory if userId provided
     if (userId && message) {
       const mentionedUsers = message.mentions.users.map(u => ({ username: u.username, id: u.id })) || [];
-      await saveConversationMemory(userId, question, assistantResponse, message.channelId, mentionedUsers);
+      const username = message.author ? message.author.username : 'Unknown';
+      await saveConversationMemory(userId, question, assistantResponse, message.channelId, mentionedUsers, username);
     }
 
     return assistantResponse;
