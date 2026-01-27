@@ -398,7 +398,7 @@ async function validateWordConnection(word1, word2) {
           content: `Are the words "${word1}" and "${word2}" meaningfully related?`
         }
       ],
-      max_tokens: 150,
+      max_completion_tokens: 150,
       temperature: 0.3
     });
 
@@ -431,7 +431,7 @@ async function generateNewWord() {
           content: 'Give me one word.'
         }
       ],
-      max_tokens: 10,
+      max_completion_tokens: 10,
       temperature: 0.8
     });
 
@@ -790,7 +790,7 @@ Rends ça DRAMATIQUE, ABSURDE et HILARANT! Ajoute des didascalies avec des actio
           content: `Histoire: ${fullText}`
         }
       ],
-      max_tokens: 1000,
+      max_completion_tokens: 1000,
       temperature: 1.0
     });
 
@@ -938,7 +938,7 @@ async function handleRoastCommand(interaction) {
             content: `Insulte drôlement: ${displayName}`
           }
         ],
-        max_tokens: 200,
+        max_completion_tokens: 200,
         temperature: 1.0
       });
 
@@ -1017,7 +1017,7 @@ async function handleDebateRespondCommand(interaction) {
             content: `Argument proposé: ${argument}`
           }
         ],
-        max_tokens: 250
+        max_completion_tokens: 250
       });
       openaiResponse = response.choices[0].message.content.trim();
     } catch (err) {
@@ -1046,7 +1046,7 @@ async function handleDebateRespondCommand(interaction) {
             content: `L'argument initial était: "${argument}"\n\nOpenAI a répondu: "${openaiResponse}"\n\nToi, tu penses quoi?`
           }
         ],
-        max_tokens: 250,
+        max_completion_tokens: 250,
         temperature: 0.8
       });
       grokResponse = response.choices[0].message.content.trim();
@@ -1076,7 +1076,7 @@ async function handleDebateRespondCommand(interaction) {
             content: `Argument initial: "${argument}"\nTa première analyse: "${openaiResponse}"\nGrok a répliqué: "${grokResponse}"\n\nConclus.`
           }
         ],
-        max_tokens: 250
+        max_completion_tokens: 250
       });
       openaiConclude = response.choices[0].message.content.trim();
     } catch (err) {
@@ -1139,7 +1139,7 @@ async function handleDebateRespondGrokCommand(interaction) {
             content: `L'utilisateur dit: ${argument}`
           }
         ],
-        max_tokens: 250,
+        max_completion_tokens: 250,
         temperature: intensity === 3 ? 1.0 : 0.8
       });
       grokResponse = response.choices[0].message.content.trim();
@@ -1169,7 +1169,7 @@ async function handleDebateRespondGrokCommand(interaction) {
             content: `L'utilisateur a attaqué Grok en disant: "${argument}"\n\nGrok a répondu: "${grokResponse}"\n\nTon avis?`
           }
         ],
-        max_tokens: 250,
+        max_completion_tokens: 250,
         temperature: intensity === 3 ? 0.95 : 0.7
       });
       openaiComment = response.choices[0].message.content.trim();
@@ -1233,7 +1233,7 @@ async function handleDebateRespondOpenaiCommand(interaction) {
             content: `L'utilisateur dit: ${argument}`
           }
         ],
-        max_tokens: 250,
+        max_completion_tokens: 250,
         temperature: intensity === 3 ? 1.0 : 0.7
       });
       openaiResponse = response.choices[0].message.content.trim();
@@ -1263,7 +1263,7 @@ async function handleDebateRespondOpenaiCommand(interaction) {
             content: `L'utilisateur a attaqué OpenAI en disant: "${argument}"\n\nOpenAI a répondu: "${openaiResponse}"\n\nTon avis?`
           }
         ],
-        max_tokens: 250,
+        max_completion_tokens: 250,
         temperature: intensity === 3 ? 1.0 : 0.8
       });
       grokComment = response.choices[0].message.content.trim();
@@ -1309,7 +1309,7 @@ async function handleVersusAiCommand(interaction) {
             content: `Débat: ${sujet}`
           }
         ],
-        max_tokens: 250
+        max_completion_tokens: 250
       });
       openai1 = response.choices[0].message.content.trim();
     } catch (err) {
@@ -1331,7 +1331,7 @@ async function handleVersusAiCommand(interaction) {
             content: `Argument à contredire: ${openai1}\n\nSujet du débat: ${sujet}`
           }
         ],
-        max_tokens: 250,
+        max_completion_tokens: 250,
         temperature: 0.8
       });
       grok1 = response.choices[0].message.content.trim();
@@ -1354,7 +1354,7 @@ async function handleVersusAiCommand(interaction) {
             content: `Mon argument: ${openai1}\n\nLa critique: ${grok1}`
           }
         ],
-        max_tokens: 250
+        max_completion_tokens: 250
       });
       openai2 = response.choices[0].message.content.trim();
     } catch (err) {
@@ -1376,7 +1376,7 @@ async function handleVersusAiCommand(interaction) {
             content: `Mon argument initial: ${grok1}\n\nSa réplique: ${openai2}`
           }
         ],
-        max_tokens: 250,
+        max_completion_tokens: 250,
         temperature: 0.8
       });
       grok2 = response.choices[0].message.content.trim();
@@ -1514,7 +1514,7 @@ async function handleStorySlashStart(interaction) {
               content: `Thème: ${theme}`
             }
           ],
-          max_tokens: 100,
+          max_completion_tokens: 100,
           temperature: 0.8
         });
 
@@ -1595,7 +1595,7 @@ async function handleStorySlashJoin(interaction) {
             content: `Thème: ${story.theme}\nHistoire jusqu'à présent: ${fullText}`
           }
         ],
-        max_tokens: 50,
+        max_completion_tokens: 50,
         temperature: 1.0
       });
 
@@ -1670,7 +1670,7 @@ async function handleStorySlashReady(interaction) {
             content: `Thème: ${story.theme}\nPersonnages: ${rosterList}`
           }
         ],
-        max_tokens: 100,
+        max_completion_tokens: 100,
         temperature: 0.8
       });
 
@@ -3385,7 +3385,7 @@ ${customPrompt.system_prompt}`;
       case 'haiku':
         const haikuResponse = await claude.messages.create({
           model: 'claude-haiku-4-5-20251001',
-          max_tokens: 1024,
+          max_completion_tokens: 1024,
           system: systemPrompt,
           messages: messages
         });
@@ -3396,7 +3396,7 @@ ${customPrompt.system_prompt}`;
       case 'sonnet':
         const sonnetResponse = await claude.messages.create({
           model: 'claude-sonnet-4-5-20250929',
-          max_tokens: 1024,
+          max_completion_tokens: 1024,
           system: systemPrompt,
           messages: messages
         });
@@ -3408,7 +3408,7 @@ ${customPrompt.system_prompt}`;
       default:
         const opusResponse = await claude.messages.create({
           model: 'claude-opus-4-5-20251101',
-          max_tokens: 1024,
+          max_completion_tokens: 1024,
           system: systemPrompt,
           messages: messages
         });
@@ -3422,7 +3422,7 @@ ${customPrompt.system_prompt}`;
       console.warn(`⚠️ ${selectedModel} a échoué, fallback vers Opus`);
       const fallbackResponse = await claude.messages.create({
         model: 'claude-opus-4-5-20251101',
-        max_tokens: 1024,
+        max_completion_tokens: 1024,
         system: systemPrompt,
         messages: messages
       });
@@ -3534,7 +3534,7 @@ ${context}`;
         { role: 'system', content: systemPrompt },
         { role: 'user', content: question }
       ],
-      max_tokens: 1500,
+      max_completion_tokens: 1500,
       temperature: 0.85
     });
 
@@ -3568,7 +3568,7 @@ ${context}`;
         { role: 'system', content: systemPrompt },
         { role: 'user', content: question }
       ],
-      max_tokens: 1500,
+      max_completion_tokens: 1500,
       temperature: 0.9
     });
 
@@ -3609,7 +3609,7 @@ Réponds comme Grok le ferait, naturel et direct.`;
         { role: 'system', content: fusionPrompt },
         { role: 'user', content: 'Fusionne ces réponses en une seule.' }
       ],
-      max_tokens: 2000,
+      max_completion_tokens: 2000,
       temperature: 0.8
     });
 
@@ -3695,7 +3695,7 @@ Sois court, max 2-3 phrases!`;
         { role: 'system', content: systemPrompt },
         { role: 'user', content: `quelqu'un te demande de ${actionName}` }
       ],
-      max_tokens: 300,
+      max_completion_tokens: 300,
       temperature: 0.85
     });
 
@@ -3899,7 +3899,7 @@ async function handleAskCommand(interaction) {
         { role: 'system', content: systemPrompt },
         { role: 'user', content: question }
       ],
-      max_tokens: 300,
+      max_completion_tokens: 300,
       temperature: 0.7
     });
 
@@ -4816,7 +4816,7 @@ Si tu as quelque chose d'IMPORTANT: génère le message (MAX 280 caractères)`;
     // Demander à Claude de générer le message spontané
     const response = await claude.messages.create({
       model: 'claude-opus-4-5-20251101',
-      max_tokens: 200,
+      max_completion_tokens: 200,
       system: contextPrompt,
       messages: [
         { role: 'user', content: 'Évalue si tu as quelque chose d\'IMPORTANT à dire. Si non, réponds "SKIP". Si oui, génère ton message.' }
@@ -4870,5 +4870,6 @@ await initializeAIConsciousness('grok');
 await initializeAIConsciousness('openai');
 
 client.login(config.token);
+
 
 
