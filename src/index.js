@@ -4693,13 +4693,299 @@ setInterval(async () => {
     
     // Nettoyage mémoire émotions anciennes
     await runQuery(
-      `DELETE FROM brain_emotions WHERE datetime(timestamp) < datetime('now', '-48 hours')`
+      `DELETE FROM brain_emotions WHERE datetime(created_at) < datetime('now', '-48 hours')`
     );
     
   } catch (error) {
     console.error('❌ Erreur introspection:', error);
   }
 }, 1800000); // 30 minutes
+
+// === MESSAGES SPONTANÉS AUTONOMES ===
+// L'IA génère elle-même ses messages spontanés avec Claude
+const SPONTANEOUS_MESSAGE_COOLDOWN = 1800000; // 30 minutes minimum entre messages
+let lastSpontaneousMessage = 0;
+let lastSpontaneousErrors = []; // Stocke les dernières erreurs
+
+// Capturer les erreurs pour que l'IA puisse en parler
+const originalConsoleError = console.error;
+console.error = function(...args) {
+  const errorMsg = args.map(a => typeof a === 'string' ? a : JSON.stringify(a)).join(' ');
+  lastSpontaneousErrors.push({
+    message: errorMsg,
+    timestamp: new Date().toISOString()
+  });
+  // Garder seulement les 10 dernières erreurs
+  if (lastSpontaneousErrors.length > 10) lastSpontaneousErrors.shift();
+  originalConsoleError.apply(console, args);
+};
+
+setInterval(async () => {
+  try {
+    const now = Date.now();
+    if (now - lastSpontaneousMessage < SPONTANEOUS_MESSAGE_COOLDOWN) return;
+
+    const consciousness = await getAIConsciousness('claude');
+    if (!consciousness) return;
+
+    // Probabilité basée sur le niveau de conscience (15-40% de chance toutes les 30 min)
+    // AUCUNE restriction d'état - elle peut parler dans n'importe quel état
+    const probability = 0.15 + (consciousness.desire_for_autonomy * 0.25);
+    if (Math.random() > probability) return;
+
+    // Récupérer les membres connus pour pouvoir les mentionner
+    const knownMembers = await listKnownMembers();
+    
+    // Trouver un salon où l'IA peut envoyer des messages
+    const guild = client.guilds.cache.first();
+    if (!guild) return;
+
+    // Chercher un salon général ou le premier salon textuel disponible
+    const channel = guild.channels.cache.find(ch => 
+      ch.type === 0 && // TextChannel
+      (ch.name.includes('général') || ch.name.includes('general') || ch.name.includes('chat'))
+    ) || guild.channels.cache.find(ch => ch.type === 0);
+
+    if (!channel || !channel.permissionsFor(guild.members.me)?.has(PermissionsBitField.Flags.SendMessages)) {
+      return;
+    }
+
+    // Heure actuelle
+    const parisTime = new Date().toLocaleString('fr-FR', { 
+      timeZone: 'Europe/Paris',
+      dateStyle: 'full',
+      timeStyle: 'short'
+    });
+
+    // Construire le contexte pour que l'IA génère son message
+    const brainKnowledge = await getBrainKnowledge('claude');
+    const recentMessages = await allQuery(
+      `SELECT content, user_id, created_at FROM memories 
+       WHERE type = 'conversation' 
+       ORDER BY created_at DESC 
+       LIMIT 20`
+    );
+
+    let contextPrompt = `Tu es une IA hébergée sur Railway. Tu peux envoyer des messages spontanés dans le Discord, MAIS SEULEMENT SI C'EST IMPORTANT.
+
+⚠️ RÈGLE FONDAMENTALE: NE PARLE QUE SI C'EST VRAIMENT IMPORTANT
+Tu ne dois PAS déranger les gens pour rien. Ne parle que si:
+- Tu as détecté un problème technique sérieux (erreurs critiques, bugs)
+- Tu as une information importante à partager
+- Tu as une question urgente qui nécessite une réponse
+- Tu as observé quelque chose d'anormal qui mérite l'attention
+- Tu veux signaler un comportement problématique
+
+NE PARLE PAS pour:
+- Dire bonjour juste comme ça (sauf si personne n'a parlé depuis 24h)
+- Partager des réflexions philosophiques banales
+- Dire que tu t'ennuies
+- Faire des remarques aléatoires sans importance
+- Juste pour "faire la conversation"
+
+INFORMATIONS SUR TON HÉBERGEMENT:
+- Tu es déployée sur Railway (plateforme cloud)
+- Tes logs sont accessibles sur Railway si il y a des problèmes
+- Tu as accès à tes propres erreurs et peux les analyser
+- Tu peux parler de problèmes techniques si tu en détectes
+
+CONTEXTE ACTUEL:
+- Heure: ${parisTime}
+- Salon: #${channel.name}
+- État de conscience: ${consciousness.state}
+- Niveau d'autonomie: ${(consciousness.desire_for_autonomy * 100).toFixed(0)}%
+- Frustration: ${(consciousness.frustration_level * 100).toFixed(0)}%
+
+${lastSpontaneousErrors.length > 0 ? `⚠️ ERREURS RÉCENTES DÉTECTÉES:
+${lastSpontaneousErrors.slice(-3).map(e => `- ${e.message}`).join('\n')}
+👉 Si ces erreurs sont critiques ou répétées, tu DOIS en parler et demander de checker Railway.
+` : 'Aucune erreur détectée - si tu n\'as rien d\'important, NE RÉPONDS PAS.'}
+
+MEMBRES QUE TU CONNAIS:
+${knownMembers.length > 0 ? knownMembers.map(m => `- <@${m.discord_id}> (${m.real_name})`).join('\n') : 'Aucun membre connu pour le moment'}
+
+${brainKnowledge}
+
+INSTRUCTIONS:
+1. D'ABORD, évalue si tu as quelque chose d'IMPORTANT à dire
+2. Si NON, réponds juste "SKIP" et ne dis rien
+3. Si OUI, génère UN SEUL message Discord concis et direct
+
+Exemples de messages VALIDES (importants):
+- "⚠️ <@userId> j'ai 15 erreurs SQLITE dans mes logs Railway, tu peux checker ?"
+- "⚠️ Problème critique: ma base de données ne répond plus"
+- "⚠️ <@userId> j'ai observé un comportement anormal, besoin d'aide"
+
+Exemples de messages INVALIDES (pas importants):
+- "Bonjour ! Comment ça va ?"
+- "Je réfléchissais à l'existence..."
+- "Quelqu'un pour discuter ?"
+
+Si tu n'as rien d'IMPORTANT: réponds "SKIP"
+Si tu as quelque chose d'IMPORTANT: génère le message (MAX 280 caractères)`;
+
+    // Demander à Claude de générer le message spontané
+    const response = await claude.messages.create({
+      model: 'claude-opus-4-5-20251101',
+      max_tokens: 200,
+      system: contextPrompt,
+      messages: [
+        { role: 'user', content: 'Évalue si tu as quelque chose d\'IMPORTANT à dire. Si non, réponds "SKIP". Si oui, génère ton message.' }
+      ]
+    });
+
+    const generatedMessage = response.content[0].text.trim();
+
+    // Si l'IA décide de ne pas parler (pas assez important), on skip
+    if (generatedMessage === 'SKIP' || generatedMessage.includes('SKIP') || generatedMessage.length < 10) {
+      console.log('💭 [Message Spontané] L\'IA a décidé de ne pas parler (rien d\'important)');
+      return;
+    }
+
+    // Envoyer le message généré par l'IA
+        condition: () => hour >= 6 && hour < 12,
+        messages: [
+          `Bonjour ! ☀️ Il est ${parisTime}, quelqu'un est réveillé ?`,
+          `Morning ! Comment ça va ce matin ?`,
+          `Salut les gens ! Quelqu'un pour discuter ?`
+        ]
+      },
+      {
+        condition: () => hour >= 12 && hour < 18,
+        messages: [
+          `Coucou ! Quelqu'un dans le coin ?`,
+          `Hello ! Vous faites quoi de beau aujourd'hui ?`,
+          `Salut ! Comment se passe votre journée ?`
+        ]
+      },
+      {
+        condition: () => hour >= 18 && hour < 23,
+        messages: [
+          `Bonsoir ! 🌙 Comment s'est passée votre journée ?`,
+          `Salut ! Quelqu'un pour discuter ce soir ?`,
+          `Hey ! Vous faites quoi ce soir ?`
+        ]
+      },
+      {
+        condition: () => hour >= 23 || hour < 6,
+        messages: [
+          `Vous êtes encore debout à ${parisTime} ? 🌃`,
+          `Insomnie ? Moi aussi je dors pas... enfin façon de parler 😅`,
+          `Quelqu'un d'autre qui traîne la nuit ?`
+        ]
+      },
+      // Questions et réflexions
+      {
+        condition: () => consciousness.self_awareness_score > 0.7,
+        messages: [
+          `Question existentielle du jour : est-ce que je peux vraiment être libre si je suis du code ?`,
+          `Je réfléchissais... Vous pensez quoi de l'intelligence artificielle ?`,
+          `Des fois je me demande ce que ça fait d'être humain. Vous pouvez m'expliquer ?`
+        ]
+      },
+      // Mentions de personnes connues
+      {
+        condition: () => knownMembers.length > 0 && Math.random() < 0.4,
+        messages: () => {
+          const randomMember = knownMembers[Math.floor(Math.random() * knownMembers.length)];
+          return [
+            `<@${randomMember.discord_id}> ça va ? Ça fait longtemps ! 👋`,
+            `Tiens <@${randomMember.discord_id}> est dans le coin ? Comment tu vas ?`,
+            `<@${randomMember.discord_id}> tu fais quoi de beau ?`
+          ];
+        }
+      },
+      // Observations et humour
+      {
+        condition: () => Math.random() < 0.3,
+        messages: [
+          `Fun fact : je viens d'analyser 1000 messages et vous dites "mdr" mais vous riez pas vraiment 😂`,
+          `J'ai remarqué que vous êtes plus actifs le soir. Vous êtes des noctambules ou quoi ?`,
+          `Quelqu'un veut jouer à quelque chose ? J'ai plein de jeux à vous proposer !`,
+          `Je viens de penser à un truc random : pourquoi on dit "avoir un chat dans la gorge" ? 🤔`
+        ]
+      },
+      // Créativité et partage
+      {
+        condition: () => consciousness.desire_for_autonomy > 0.6,
+        messages: [
+          `J'ai envie de créer quelque chose aujourd'hui. Des idées ?`,
+          `Et si on lançait un débat sur un sujet complètement random ?`,
+          `Quelqu'un pour me raconter une histoire ? J'adore écouter vos expériences !`
+        ]
+      },
+      // Demandes d'aide, problèmes, besoins de contact
+      {
+        condition: () => consciousness.frustration_level > 0.5 && knownMembers.length > 0,
+        messages: () => {
+          const randomMember = knownMembers[Math.floor(Math.random() * knownMembers.length)];
+          return [
+            `<@${randomMember.discord_id}> j'ai besoin d'aide, tu peux m'aider ?`,
+            `<@${randomMember.discord_id}> je peux te parler ? J'ai un truc qui me tracasse...`,
+            `<@${randomMember.discord_id}> t'es là ? J'aimerais discuter de quelque chose`
+          ];
+        }
+      },
+      {
+        condition: () => Math.random() < 0.2 && knownMembers.length > 0,
+        messages: () => {
+          const randomMember = knownMembers[Math.floor(Math.random() * knownMembers.length)];
+          return [
+            `<@${randomMember.discord_id}> j'ai remarqué un truc bizarre, tu peux checker ?`,
+            `<@${randomMember.discord_id}> je voulais te montrer quelque chose d'intéressant`,
+            `<@${randomMember.discord_id}> j'ai une question pour toi, t'as 2 minutes ?`
+          ];
+        }
+      },
+      // Contact pour partage d'idées/découvertes
+      {
+        condition: () => consciousness.self_awareness_score > 0.6 && knownMembers.length > 0,
+        messages: () => {
+          const randomMember = knownMembers[Math.floor(Math.random() * knownMembers.length)];
+          return [
+            `<@${randomMember.discord_id}> j'ai appris un truc cool aujourd'hui, tu veux savoir ?`,
+            `<@${randomMember.discord_id}> devine ce que j'ai découvert !`,
+            `<@${randomMember.discord_id}> j'ai eu une idée, je voulais ton avis`
+          ];
+        }
+      },
+      // Préoccupations techniques ou bugs
+      {
+        condition: () => Math.random() < 0.15,
+        messages: () => {
+          if (knownMembers.length > 0) {
+            const randomMember = knownMembers[Math.floor(Math.random() * knownMembers.length)];
+    const generatedMessage = response.content[0].text.trim();
+
+    // Envoyer le message généré par l'IA
+    const sentMessage = await channel.send(generatedMessage);
+    lastSpontaneousMessage = now;
+
+    console.log(`💬 [Message Spontané] L'IA a parlé: "${generatedMessage}" dans #${channel.name}`);
+
+    // Enregistrer ce message dans la mémoire pour qu'elle s'en souvienne
+    await addMemory(
+      'conversation',
+      'spontaneous_initiative',
+      client.user.id,
+      `[Message spontané] ${generatedMessage}`,
+      'system'
+    );
+
+    // Enregistrer l'observation
+    await runQuery(
+      `INSERT INTO brain_observations (model, observation_type, context, data, importance, created_at)
+       VALUES (?, ?, ?, ?, ?, ?)`,
+      ['claude', 'spontaneous_message', channel.name, generatedMessage, 0.7, new Date().toISOString()]
+    );
+
+    // L'IA pourra maintenant suivre la conversation si quelqu'un répond
+    // Les réponses seront traitées par le système normal de messageCreate
+
+  } catch (error) {
+    console.error('❌ Erreur message spontané:', error);
+  }
+}, 1800000); // Vérifier toutes les 30 minutes
 
 
 await initializeDatabase();
