@@ -3,7 +3,6 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import sqlite3 from 'sqlite3';
 import OpenAI from 'openai';
-import { parse } from '@babel/parser';
 import { execSync } from 'node:child_process';
 import {
   ActionRowBuilder,
@@ -18,7 +17,6 @@ import {
   SlashCommandBuilder,
   ThreadAutoArchiveDuration
 } from 'discord.js';
-import { customCommands, customFeatures } from './custom.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -228,9 +226,6 @@ const activeStories = new Map();
 
 // Debate state - track message count per channel for crescendo
 const debateState = new Map();
-
-// Pending code modifications (userId -> { suggestion, context })
-const pendingCodeMods = new Map();
 
 // === Memory System Functions ===
 
@@ -2210,14 +2205,6 @@ async function handleAIAssistant(message) {
 
       // Check if AI wants to execute an action (for creator only)
       if (isCreator) {
-        // Code generation/modification
-        if (assistantResponse.includes('[[CODE_MODIFY]]')) {
-          const cleanResponse = assistantResponse.replace(/\[\[CODE_MODIFY\]\]/, '').trim();
-          if (cleanResponse) await message.channel.send(cleanResponse);
-          await executeSelfModification(userQuestion, message);
-          return;
-        }
-
         // Discord actions
         const deleteAction = assistantResponse.match(/\[\[DELETE:(\d+)\]\]/);
         const banAction = assistantResponse.match(/\[\[BAN:(<@!?(\d+)>|\d+)\]\]/);
@@ -2470,9 +2457,6 @@ Si action demandée, utilise UN SEUL code à la fin:
 - [[KICK:userId]] pour kick  
 - [[MUTE:userId:duration]] pour mute
 - [[MONITOR:userId]] pour surveiller
-- [[CODE_MODIFY]] UNIQUEMENT si modification majeure du bot (nouvelle feature complexe)
-
-Ne mets JAMAIS [[CODE_GEN]]. Pour commande simple comme /hello, réponds juste "D'accord, je lance l'implémentation." puis mets [[CODE_MODIFY]].
 
 Utilise le code fourni si question sur bot.` : ''}`;
 
@@ -2553,8 +2537,6 @@ async function getOpenaiAssistantResponse(question, context, isCreator = false) 
 
 ${isCreator ? `Si on te demande d'agir:
 - Actions Discord: [[DELETE:X]] [[BAN:userId]] [[KICK:userId]] [[MUTE:userId:duration]] [[MONITOR:userId]]
-- Modifier bot: [[CODE_MODIFY]]
-- Code exemple: [[CODE_GEN]]
 
 Si question sur features bot, regarde le code dans le contexte.` : ''}
 
@@ -2590,8 +2572,7 @@ async function getGrokAssistantResponse(question, context, isCreator = false) {
 - Court et direct
 - Pas de smileys ou questions en trop
 
-${isCreator ? `Actions: [[DELETE:X]] [[BAN:userId]] [[KICK:userId]] [[MUTE:userId:duration]] [[MONITOR:userId]]
-Code: [[CODE_MODIFY]] [[CODE_GEN]]` : ''}
+${isCreator ? `Actions: [[DELETE:X]] [[BAN:userId]] [[KICK:userId]] [[MUTE:userId:duration]] [[MONITOR:userId]]` : ''}
 
 ${context}`;
 
@@ -2652,401 +2633,6 @@ Réponds comme Grok le ferait, naturel et direct.`;
     // Fallback: return both if fusion fails
     return `${openaiResp}\n\n${grokResp}`;
   }
-}
-
-// Try to generate and execute code
-async function tryExecuteAssistantCodeGeneration(question, message) {
-  try {
-    // Check for code generation keywords
-    const isCodeGenRequest = /génère|genere|code|modifi|improve|fix|crée|cree|ajoute|rajoute|javascript|python|script|fonction|function|commande|command/i.test(question);
-    const isSelfModifyRequest = /modifie.*ton code|modifie.*index|change.*le bot|ajoute.*feature|rajoute|crée.*commande|ajoute.*commande|nouvelle.*commande/i.test(question);
-
-    if (!isCodeGenRequest) return false; // Not a code request
-
-    if (isSelfModifyRequest) {
-      // Self-modification request
-      await executeSelfModification(question, message);
-      return true;
-    } else {
-      // Regular code generation
-      await executeCodeGeneration(question, message);
-      return true;
-    }
-  } catch (error) {
-    console.error('❌ Erreur génération code assistant:', error);
-    return false;
-  }
-}
-
-// Generate and execute code snippets
-async function executeCodeGeneration(question, message) {
-  try {
-    await message.channel.send('⏳ j\'analyse ce qu\'il faut changer...');
-
-    // Read current bot code for context
-    const currentCode = fs.readFileSync('./src/index.js', 'utf-8');
-    
-    const systemPrompt = `Tu es un dev qui modifie le bot Discord existant.
-
-CONTEXTE: Le bot existe déjà dans index.js avec toutes les imports et client setup.
-
-Ta tâche: Suggérer UNIQUEMENT le code minimal à ajouter/modifier pour "${question}".
-
-Format:
-\`\`\`javascript
-// Code à ajouter (juste les quelques lignes nécessaires)
-\`\`\`
-
-PAS DE:
-- Imports (déjà fait)
-- client.login() (déjà fait)  
-- Création du client (déjà fait)
-- Code de base existant
-
-JUSTE ce qu'il faut ajouter/modifier!`;
-
-    const codeResponse = await openai.chat.completions.create({
-      model: 'gpt-4o',
-      messages: [
-        { role: 'system', content: systemPrompt },
-        { role: 'user', content: `Code actuel (extrait):\n${currentCode.substring(0, 2000)}\n\nDemande: ${question}` }
-      ],
-      max_tokens: 2000,
-      temperature: 0.7
-    });
-
-    const generatedCode = codeResponse.choices[0].message.content.trim();
-    
-    // Extract code from markdown blocks
-    let code = generatedCode;
-    const codeMatch = generatedCode.match(/```(?:javascript|js|python)?\n?([\s\S]*?)```/);
-    if (codeMatch) {
-      code = codeMatch[1].trim();
-    }
-
-    // Display the suggested code
-    await message.channel.send(`Code suggéré:\n\`\`\`javascript\n${code}\n\`\`\`\n\nDis-moi "oui" ou "applique" si ça te plaît! (ou "non" si tu veux que je change)`);
-
-  } catch (error) {
-    console.error('❌ Erreur code generation:', error);
-    await message.channel.send('❌ Erreur lors de la génération du code');
-  }
-}
-
-// Modify bot's own code
-async function executeSelfModification(question, message) {
-  try {
-    await message.channel.send('⏳ j\'analyse ce qu\'il faut changer...');
-
-    // Get current code context
-    const currentCode = fs.readFileSync('./src/index.js', 'utf-8');
-
-    const systemPrompt = `Tu modifies le bot Discord M-Yra existant. Demande: "${question}"
-
-CONTEXTE EXISTANT:
-- Bot discord.js v14 avec client, intents, toutes imports déjà faits
-- Slash commands déjà setup avec guild.commands.set()
-- Handler interactionCreate déjà présent
-- SQLite, OpenAI, Grok, Claude déjà configurés
-
-TON RÔLE: Suggère UNIQUEMENT les lignes minimales à ajouter/modifier.
-
-Exemples:
-- /hello → Juste la commande dans le tableau + le case dans le handler (10-15 lignes)
-- Feature complexe → Plus de code si vraiment nécessaire
-
-Format:
-\`\`\`javascript
-// LIGNES À AJOUTER/MODIFIER:
-[code minimal sans réimporter ou recréer ce qui existe]
-\`\`\`
-
-INTERDICTIONS:
-- Ne recrée JAMAIS les imports (déjà faits)
-- Ne recrée JAMAIS le client (existe déjà)
-- Ne recrée JAMAIS REST/Routes (pas besoin, guild.commands.set() suffit)
-- Ne montre PAS de code déjà existant`;
-
-    const modResponse = await openai.chat.completions.create({
-      model: 'gpt-4o',
-      messages: [
-        { role: 'system', content: systemPrompt },
-        { role: 'user', content: `Code actuel (extrait):\n${currentCode.substring(3000, 5000)}\n\nDemande: ${question}` }
-      ],
-      max_tokens: 2500,
-      temperature: 0.7
-    });
-
-    const suggestedCode = modResponse.choices[0].message.content.trim();
-    
-    // Display the suggestion
-    await message.channel.send('📝 Code suggéré:\n' + suggestedCode);
-    
-    // Store pending modification
-    const modId = `${message.author.id}_${Date.now()}`;
-    pendingCodeMods.set(modId, {
-      userId: message.author.id,
-      channelId: message.channelId,
-      suggestion: suggestedCode,
-      question: question,
-      timestamp: Date.now()
-    });
-
-    // Ask for confirmation
-    await message.channel.send(`💡 **Code suggéré ci-dessus**\n\n✅ Réponds **"oui"** ou **"applique"** pour l'ajouter\n❌ Réponds **"non"** pour annuler\n🔄 Réponds **"non, [feedback]"** pour que je corrige (ex: "non, mets tout en français")`);
-
-  } catch (error) {
-    console.error('❌ Erreur self modification:', error);
-    await message.channel.send('❌ Erreur lors de l\'analyse de modification');
-  }
-}
-
-// Apply approved code modification to custom.js
-async function applyCodeModification(message, modInfo) {
-  try {
-    await message.channel.send('⏳ application de la modification...');
-
-    const filePath = './src/custom.js';
-    let currentCode = fs.readFileSync(filePath, 'utf-8');
-
-    // Extract code from suggestion
-    let codeToAdd = modInfo.suggestion;
-    const codeMatch = modInfo.suggestion.match(/```(?:javascript|js)?\n?([\s\S]*?)```/);
-    if (codeMatch) {
-      codeToAdd = codeMatch[1].trim();
-    }
-
-    // Detect if this is a major change
-    const isMajorChange = detectMajorChange(modInfo.question, codeToAdd);
-
-    // Find best insertion point:
-    // 1. Look for "// Mute action" or last async function definition (safe spot)
-    // 2. If that fails, insert before the last 3 lines (usually client.login())
-    let insertPosition;
-    
-    // Try to find a good anchor point (look for last async function)
-    const lastAsyncMatch = currentCode.lastIndexOf('async function ');
-    if (lastAsyncMatch > 0) {
-      // Find the closing brace of this function
-      const afterFunc = currentCode.indexOf('\n}\n', lastAsyncMatch);
-      insertPosition = afterFunc > 0 ? afterFunc + 3 : currentCode.length - 500;
-    } else {
-      // Fallback: insert before last 500 chars (before client.login)
-      insertPosition = currentCode.length - 500;
-    }
-
-    const updatedCode = currentCode.slice(0, insertPosition) + '\n\n' + codeToAdd + '\n\n' + currentCode.slice(insertPosition);
-
-    // Show preview of insertion with context before applying
-    const contextBefore = currentCode.slice(Math.max(0, insertPosition - 200), insertPosition).trim().split('\n').slice(-5).join('\n');
-    const contextAfter = currentCode.slice(insertPosition, insertPosition + 200).trim().split('\n').slice(0, 5).join('\n');
-    
-    const preview = `📍 **Aperçu de l'insertion:**\n\n\`\`\`javascript\n// ⬆️ AVANT (ligne ~${currentCode.slice(0, insertPosition).split('\n').length}):\n${contextBefore}\n\n// ➕ CODE À INSÉRER:\n${codeToAdd}\n\n// ⬇️ APRÈS:\n${contextAfter}\n\`\`\`\n\n✅ Réponds **"oui"** pour confirmer l'insertion\n❌ Réponds **"non"** pour annuler`;
-    
-    await message.channel.send(preview);
-    
-    // Store pending insertion for approval
-    const insertionId = `${message.author.id}_insert_${Date.now()}`;
-    const pendingInsertions = global.pendingInsertions || new Map();
-    pendingInsertions.set(insertionId, {
-      userId: message.author.id,
-      channelId: message.channelId,
-      updatedCode: updatedCode,
-      filePath: filePath,
-      isMajorChange: isMajorChange,
-      question: modInfo.question,
-      timestamp: Date.now()
-    });
-    global.pendingInsertions = pendingInsertions;
-    
-    return; // Wait for user approval before writing file
-  } catch (error) {
-    console.error('❌ Erreur application modification:', error);
-    await message.channel.send(`❌ Erreur lors de l'application: ${error.message}`);
-  }
-}
-
-// Try to parse code using Babel to catch syntax errors before writing
-function tryParseWithBabel(code) {
-  try {
-    parse(code, {
-      sourceType: 'module',
-      plugins: [
-        'classProperties',
-        'classPrivateProperties',
-        'classPrivateMethods',
-        'decorators-legacy',
-        'dynamicImport',
-        'importMeta',
-        'jsx',
-        'topLevelAwait',
-        'optionalChaining',
-        'nullishCoalescingOperator',
-        'numericSeparator',
-        'objectRestSpread'
-      ]
-    });
-    return { ok: true };
-  } catch (error) {
-    return { ok: false, error };
-  }
-}
-
-// Ask the model for a minimal syntax-only fix when parsing fails
-async function autoFixSyntaxWithModel(updatedCode, parseError) {
-  try {
-    const locationHint = parseError?.loc ? `line ${parseError.loc.line}, column ${parseError.loc.column}` : 'unknown position';
-    const systemPrompt = 'You fix JavaScript syntax errors in full files. Keep logic unchanged, only repair syntax. Return ONLY the full corrected file content without explanation.';
-    const userPrompt = `The file fails to parse with error: ${parseError?.message || 'Unknown error'} at ${locationHint}.
-Please repair the syntax without altering behavior.
-
-File content:
-\`\`\`javascript
-${updatedCode}
-\`\`\``;
-
-    const response = await openai.chat.completions.create({
-      model: 'gpt-4o-mini',
-      messages: [
-        { role: 'system', content: systemPrompt },
-        { role: 'user', content: userPrompt }
-      ],
-      max_tokens: 8000,
-      temperature: 0
-    });
-
-    const suggestion = response.choices[0].message.content.trim();
-    const codeMatch = suggestion.match(/```(?:javascript|js)?\n?([\s\S]*?)```/);
-    const fixedCode = codeMatch ? codeMatch[1].trim() : suggestion;
-
-    return { ok: true, fixedCode };
-  } catch (error) {
-    console.warn('⚠️ Auto-fix failed:', error.message);
-    return { ok: false, error };
-  }
-}
-
-// Apply approved insertion (called after user says "oui")
-async function applyApprovedInsertion(message, insertion) {
-  try {
-    const baseCode = fs.readFileSync(insertion.filePath, 'utf-8');
-
-    // Validate existing file syntax before applying anything
-    const baseParse = tryParseWithBabel(baseCode);
-    if (!baseParse.ok) {
-      await message.channel.send(`⚠️ Le fichier actuel contient déjà une erreur de syntaxe (avant insertion). Merci de corriger manuellement.\n${baseParse.error.message}`);
-      return;
-    }
-
-    let updatedCode = insertion.updatedCode;
-    let parseResult = tryParseWithBabel(updatedCode);
-
-    // If parsing fails, try a model-assisted minimal syntax fix
-    if (!parseResult.ok) {
-      await message.channel.send(`⚠️ Le code proposé ne se parse pas (syntax error). Tentative d'auto-correction...\n${parseResult.error.message}`);
-      const fixAttempt = await autoFixSyntaxWithModel(updatedCode, parseResult.error);
-      if (!fixAttempt.ok || !fixAttempt.fixedCode) {
-        await message.channel.send('❌ Auto-correction impossible. Insertion annulée.');
-        return;
-      }
-
-      // Re-parse the fixed code
-      const secondParse = tryParseWithBabel(fixAttempt.fixedCode);
-      if (!secondParse.ok) {
-        await message.channel.send(`❌ Même après auto-fix, la syntaxe reste invalide: ${secondParse.error.message}`);
-        return;
-      }
-
-      updatedCode = fixAttempt.fixedCode;
-      parseResult = secondParse;
-      await message.channel.send('✅ Syntaxe corrigée automatiquement (gpt-4o-mini). Application en cours...');
-    }
-
-    // Write the modified code
-    fs.writeFileSync(insertion.filePath, updatedCode, 'utf-8');
-
-    // Try to create git branch and commit
-    try {
-      const branchName = `ia-modification-${Date.now()}`;
-      const repoPath = './';
-
-      // Check if git repo exists
-      if (fs.existsSync(path.join(repoPath, '.git'))) {
-        // Resolve target branch (configured) and base from it
-        const currentBranch = execSync(`cd "${repoPath}" && git rev-parse --abbrev-ref HEAD`, { encoding: 'utf-8' }).trim();
-        const targetBranch = config.gitTargetBranch || currentBranch;
-
-        // Switch to target branch, then create feature branch from it
-        execSync(`cd "${repoPath}" && git checkout ${targetBranch}`, { stdio: 'ignore' });
-        execSync(`cd "${repoPath}" && git checkout -b ${branchName}`, { stdio: 'ignore' });
-        
-        // Add and commit changes
-        execSync(`cd "${repoPath}" && git add src/custom.js`, { stdio: 'ignore' });
-        execSync(`cd "${repoPath}" && git commit -m "IA modification: ${insertion.question}"`, { stdio: 'ignore' });
-
-        if (insertion.isMajorChange) {
-          // Major change - keep branch for review, push branch only
-          try {
-            const pushCmd = getGitPushCommand(branchName);
-            if (pushCmd) {
-              execSync(`cd "${repoPath}" && ${pushCmd}`, { stdio: 'ignore' });
-            }
-            await message.channel.send(`⚠️ Changement majeur. Branche créée: \`${branchName}\` (base: \`${targetBranch}\`). À relire et merger manuellement.`);
-          } catch (pushError) {
-            console.warn('⚠️ Git push failed:', pushError.message);
-            await message.channel.send(`⚠️ Branche \`${branchName}\` créée localement (push échoué).`);
-          }
-        } else {
-          // Minor change - auto-merge into target branch and push
-          execSync(`cd "${repoPath}" && git checkout ${targetBranch} && git merge ${branchName}`, { stdio: 'ignore' });
-          
-          // Push to remote
-          try {
-            const pushCmd = getGitPushCommand(targetBranch);
-            if (pushCmd) {
-              execSync(`cd "${repoPath}" && ${pushCmd}`, { stdio: 'ignore' });
-              await message.channel.send(`✅ Code appliqué et poussé sur \`${targetBranch}\`! Railway va redémarrer automatiquement... 🔄`);
-            } else {
-              await message.channel.send(`✅ Code appliqué et fusionné sur \`${targetBranch}\`!`);
-            }
-          } catch (pushError) {
-            console.warn('⚠️ Git push failed:', pushError.message);
-            await message.channel.send(`✅ Code appliqué localement (push échoué: ${pushError.message})`);
-          }
-        }
-        
-        console.log(`✅ Code modification applied: ${insertion.question} (Major: ${insertion.isMajorChange})`);
-      } else {
-        await message.channel.send('✅ Code appliqué!\n⏰ Le changement sera effectif au prochain redémarrage automatique de Railway (généralement chaque jour).');
-      }
-    } catch (gitError) {
-      console.warn('⚠️ Git operation failed:', gitError.message);
-      await message.channel.send('✅ Code appliqué!\n⏰ Le changement sera effectif au prochain redémarrage automatique de Railway (généralement chaque jour).');
-    }
-
-  } catch (error) {
-    console.error('❌ Erreur application modification:', error);
-    await message.channel.send(`❌ Erreur lors de l'application: ${error.message}`);
-  }
-}
-
-// Detect if a code change is major
-function detectMajorChange(question, code) {
-  const majorKeywords = [
-    'refactor', 'restructure', 'complètement', 'entièrement', 'rewrite',
-    'système', 'architecture', 'major feature', 'core', 'fondamental',
-    'remplaces', 'remplace complètement', 'supprime', 'remove', 'overhaul'
-  ];
-
-  const isMajorByKeyword = majorKeywords.some(keyword => 
-    question.toLowerCase().includes(keyword)
-  );
-
-  // Count lines of code
-  const lineCount = code.split('\n').length;
-  const isMajorBySize = lineCount > 50; // More than 50 lines is major
-
-  return isMajorByKeyword || isMajorBySize;
 }
 
 // Try to execute assistant actions
@@ -3357,75 +2943,7 @@ client.on('messageCreate', async (message) => {
   );
 
   if (isAssistantContext) {
-    const isCreator = message.author.id === config.creatorId;
-    
-    // Priority 0: Handle pending code insertions (must approve preview)
-    const pendingInsertions = global.pendingInsertions || new Map();
-    if (isCreator && pendingInsertions.size > 0) {
-      const lastInsertion = Array.from(pendingInsertions.values()).pop();
-      const lastInsertionKey = Array.from(pendingInsertions.keys()).pop();
-      
-      if (lastInsertion && lastInsertion.userId === message.author.id) {
-        const isApproving = /^(oui|ok|yes|applique|parfait|c'est bon|vas-y|go|👍)$/i.test(message.content.trim());
-        const isRejecting = /^(non|nope|cancel|annule)$/i.test(message.content.trim());
-        
-        if (isApproving) {
-          await applyApprovedInsertion(message, lastInsertion);
-          pendingInsertions.delete(lastInsertionKey);
-          return;
-        }
-        
-        if (isRejecting) {
-          await message.channel.send('❌ Insertion annulée.');
-          pendingInsertions.delete(lastInsertionKey);
-          return;
-        }
-      }
-    }
-    
-    // Priority 1: Handle pending code modification confirmations (creator only)
-    if (isCreator && pendingCodeMods.size > 0) {
-      const lastMod = Array.from(pendingCodeMods.values()).pop();
-      const lastModKey = Array.from(pendingCodeMods.keys()).pop();
-      
-      // Check if this is a simple confirmation (just "oui", "applique", etc.)
-      const isSimpleConfirmation = /^(oui|ok|yes|applique|parfait|c'est bon|vas-y|go|👍)$/i.test(message.content.trim());
-      
-      if (isSimpleConfirmation && lastMod && lastMod.userId === message.author.id) {
-        await applyCodeModification(message, lastMod);
-        pendingCodeMods.delete(lastModKey);
-        return;
-      }
-      
-      // Check if this is a rejection with feedback
-      const rejectMatch = message.content.match(/^(non|nope|change|modifie|améliore)[\s,:]*(.*)/i);
-      if (rejectMatch) {
-        const feedback = rejectMatch[2].trim();
-        
-        if (feedback && lastMod) {
-          // Regenerate with feedback
-          await message.channel.send('⏳ Je corrige ça...');
-          pendingCodeMods.delete(lastModKey);
-          const newQuestion = `${lastMod.question} (CORRECTION: ${feedback})`;
-          await executeSelfModification(newQuestion, message);
-          return;
-        } else {
-          // Just cancel
-          pendingCodeMods.clear();
-          await message.channel.send('❌ Annulé. Dis-moi ce que tu veux que je fasse!');
-          return;
-        }
-      }
-      
-      // If message doesn't match confirmation patterns but we have pending mods,
-      // assume user wants to skip/cancel and ask something else
-      if (lastMod && (Date.now() - lastMod.timestamp > 60000)) {
-        // Auto-clear old pending mods after 1 minute
-        pendingCodeMods.clear();
-      }
-    }
-
-    // Priority 2: Regular AI assistant response
+    // Regular AI assistant response
     await handleAIAssistant(message);
     return;
   }
