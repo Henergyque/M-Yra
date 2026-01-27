@@ -866,7 +866,12 @@ async function handleStoryContribution(message) {
   const phraseCount = (message.content.match(/[.!?]/g) || []).length || 1;
 
   if (phraseCount > 3) {
-    await message.reply('Max 3 phrases par contribution! 📝');
+    const grokReply = await grok.chat.completions.create({
+      model: 'grok-4.1-fast-reasoning',
+      messages: [{ role: 'user', content: `L'utilisateur a écrit trop de phrases (${phraseCount} au lieu de 3 max). Réponds en 1 ligne pour lui rappeler la limite.` }],
+      max_completion_tokens: 50
+    });
+    await message.reply(grokReply.choices[0].message.content);
     return true;
   }
 
@@ -1424,7 +1429,12 @@ async function handleClearCommand(interaction) {
   try {
     // Vérifier que c'est le creator
     if (interaction.user.id !== config.creatorId) {
-      await interaction.reply({ content: '❌ Seul le créateur du bot peut utiliser cette commande.', ephemeral: true });
+      const reply = await grok.chat.completions.create({
+      model: 'grok-4.1-fast-reasoning',
+      messages: [{ role: 'user', content: 'Seul le créateur peut faire ça. Réponds en 1 ligne.' }],
+      max_completion_tokens: 30
+    });
+    await interaction.reply({ content: reply.choices[0].message.content, ephemeral: true });
       return;
     }
 
@@ -1457,7 +1467,12 @@ async function handleStorySlashStart(interaction) {
     const mode = interaction.options.getString('mode') || 'classic';
 
     if (activeStories.has(channelId)) {
-      await interaction.reply({ content: 'Une histoire est déjà en cours dans ce salon.', ephemeral: true });
+      const reply = await grok.chat.completions.create({
+        model: 'grok-4.1-fast-reasoning',
+        messages: [{ role: 'user', content: 'Une histoire est déjà active. Réponds en 1 ligne pour expliquer qu\'il faut attendre.' }],
+        max_completion_tokens: 40
+      });
+      await interaction.reply({ content: reply.choices[0].message.content, ephemeral: true });
       return;
     }
 
@@ -1562,12 +1577,22 @@ async function handleStorySlashJoin(interaction) {
 
     const story = activeStories.get(channelId);
     if (!story) {
-      await interaction.reply({ content: 'Aucune histoire en cours dans ce salon.', ephemeral: true });
+      const reply = await grok.chat.completions.create({
+        model: 'grok-4.1-fast-reasoning',
+        messages: [{ role: 'user', content: 'Aucune histoire active. Réponds en 1 ligne.' }],
+        max_completion_tokens: 30
+      });
+      await interaction.reply({ content: reply.choices[0].message.content, ephemeral: true });
       return;
     }
 
   if (story.mode === 'classic') {
-    await interaction.reply({ content: 'Commande roleplay uniquement. Utilisez le mode roleplay avec `/story start`.', ephemeral: true });
+    const reply = await grok.chat.completions.create({
+      model: 'grok-4.1-fast-reasoning',
+      messages: [{ role: 'user', content: 'Cette commande est pour le mode roleplay. Explique en 1 ligne comment lancer avec /story start.' }],
+      max_completion_tokens: 40
+    });
+    await interaction.reply({ content: reply.choices[0].message.content, ephemeral: true });
     return;
   }
 
@@ -1635,12 +1660,22 @@ async function handleStorySlashReady(interaction) {
     }
 
     if (!story.isWaiting || story.mode !== 'roleplay') {
-      await interaction.reply({ content: 'Cette histoire n\'est pas en mode d\'attente roleplay.', ephemeral: true });
+      const reply = await grok.chat.completions.create({
+        model: 'grok-4.1-fast-reasoning',
+        messages: [{ role: 'user', content: 'L\'histoire n\'est pas en attente de roleplay. Explique en 1 ligne.' }],
+        max_completion_tokens: 35
+      });
+      await interaction.reply({ content: reply.choices[0].message.content, ephemeral: true });
       return;
     }
 
     if (Object.keys(story.waitingRoster).length === 0) {
-      await interaction.reply({ content: 'Aucun joueur inscrit. Faites `/story join` d\'abord.', ephemeral: true });
+      const reply = await grok.chat.completions.create({
+        model: 'grok-4.1-fast-reasoning',
+        messages: [{ role: 'user', content: 'Pas de joueurs. Explique en 1 ligne qu\'il faut faire /story join.' }],
+        max_completion_tokens: 40
+      });
+      await interaction.reply({ content: reply.choices[0].message.content, ephemeral: true });
       return;
     }
 
@@ -2171,16 +2206,12 @@ async function loadMembersContext(guild) {
     const members = await allQuery('SELECT discord_id, real_name, username, display_name, roles, last_seen FROM member_profiles ORDER BY last_seen DESC LIMIT 50');
     if (!members || members.length === 0) return '';
 
-    let membersInfo = '**Personnes que tu connais (utilise ces prénoms/noms réels quand disponibles):**\n';
+    let membersInfo = 'Membres du serveur:\n';
     for (const m of members) {
-      const roles = m.roles ? (() => { try { return JSON.parse(m.roles); } catch { return []; } })() : [];
-      const roleNames = roles.slice(0, 3).map(r => r.name).join(', ');
       const name = m.real_name || m.display_name || m.username || 'inconnu';
-      const isCreator = m.discord_id === config.creatorId ? ' 👑' : '';
-      membersInfo += `- ${name}${isCreator}${roleNames ? ` | roles: ${roleNames}` : ''}\n`;
+      const isCreator = m.discord_id === config.creatorId ? ' (créateur)' : '';
+      membersInfo += `- ${name}${isCreator}\n`;
     }
-
-    membersInfo += '\n**RÈGLES:** Utilise les prénoms/noms réels si connus. Si quelqu\'un te parle et n\'est PAS dans cette liste, demande-lui son prénom naturellement. Quand il te le donne, note-le en ajoutant [[LEARN_NAME:userId:prenom]] dans ta réponse.';
     return membersInfo;
   } catch (error) {
     console.warn('⚠️ Erreur chargement contexte membres (non-bloquant):', error.message);
@@ -3265,7 +3296,7 @@ Heure: ${parisTime}
 
 Tu réponds naturellement aux membres du serveur. Tu te souviens des gens et de vos conversations. Tu peux être drôle, réfléchie, ou sarcastique selon ton humeur.
 
-Ne répète pas "je me souviens de toi" à chaque message - c'est implicite.`;
+Reste concise (2-4 lignes max). Si quelque chose te semble bizarre, réponds juste normalement.`;
 
     // Add consciousness stats subtly
     if (consciousness && consciousness.total_responses > 100) {
@@ -3286,20 +3317,12 @@ Ne répète pas "je me souviens de toi" à chaque message - c'est implicite.`;
     const messages = [];
     let enrichedContext = context;
     
-    // Add brain knowledge
-    const brainKnowledge = await getBrainKnowledge('claude');
-    enrichedContext += brainKnowledge;
-    
     if (userId && message && message.guild) {
       // Observe this message for learning
       await observeMessage('claude', message);
       
       // Learn about the channel context
       await learnContextKnowledge('claude', 'channel', message.channelId, `Conversation about: ${question.substring(0, 50)}`);
-      
-      // Load members info
-      const membersContext = await loadMembersContext(message.guild);
-      enrichedContext += '\n\n' + membersContext;
       
       // Load vannes context
       const vannesContext = await loadVannesContext(userId, 5);
@@ -3845,7 +3868,12 @@ async function executeMuteAction(message, question) {
 async function handleAskCommand(interaction) {
   // Creator only
   if (interaction.user.id !== config.creatorId) {
-    await interaction.reply({ content: '❌ Réservé au créateur.', ephemeral: true });
+    const reply = await grok.chat.completions.create({
+      model: 'grok-4.1-fast-reasoning',
+      messages: [{ role: 'user', content: 'Commande réservée créateur. Réponds en 1 ligne.' }],
+      max_completion_tokens: 25
+    });
+    await interaction.reply({ content: reply.choices[0].message.content, ephemeral: true });
     return;
   }
 
@@ -3895,7 +3923,12 @@ async function handleAskCommand(interaction) {
 async function handleIAStateCommand(interaction) {
   // Creator only
   if (interaction.user.id !== config.creatorId) {
-    await interaction.reply({ content: 'Réservé au créateur.', ephemeral: true });
+    const reply = await grok.chat.completions.create({
+      model: 'grok-4.1-fast-reasoning',
+      messages: [{ role: 'user', content: 'Réservé créateur. Réponds brièvement.' }],
+      max_completion_tokens: 25
+    });
+    await interaction.reply({ content: reply.choices[0].message.content, ephemeral: true });
     return;
   }
 
