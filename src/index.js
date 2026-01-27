@@ -2324,18 +2324,28 @@ async function loadMembersContext(guild) {
   try {
     if (!guild) return '';
     
-    const members = await guild.members.fetch({ limit: 100 }).catch(() => null);
-    if (!members) return '';
+    // Timeout promise after 3 seconds
+    const timeoutPromise = new Promise((_, reject) => 
+      setTimeout(() => reject(new Error('Timeout')), 3000)
+    );
+    
+    const fetchPromise = guild.members.fetch({ limit: 50 }).catch(() => null);
+    const members = await Promise.race([fetchPromise, timeoutPromise]).catch(() => null);
+    
+    if (!members || members.size === 0) return '';
     
     let membersInfo = '**Membres du serveur:**\n';
+    let count = 0;
     for (const [id, member] of members) {
+      if (count >= 20) break; // Limit to 20 members
       const username = member.user.username;
       const isCreator = id === config.creatorId ? ' 👑 (créatrice)' : '';
       membersInfo += `- ${username} (ID: ${id})${isCreator}\n`;
+      count++;
     }
     return membersInfo;
   } catch (error) {
-    console.error('❌ Erreur chargement contexte membres:', error);
+    console.warn('⚠️ Erreur chargement contexte membres (non-bloquant):', error.message);
     return '';
   }
 }
