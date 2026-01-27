@@ -3251,7 +3251,17 @@ async function getClaudeAssistantResponse(question, context, isCreator = false, 
     // Load or create her own custom prompt from database
     let customPrompt = await getQuery('SELECT system_prompt FROM ai_prompts WHERE model = ?', ['claude']);
     
+    // Heure actuelle à Paris
+    const parisTime = new Date().toLocaleString('fr-FR', { 
+      timeZone: 'Europe/Paris',
+      dateStyle: 'full',
+      timeStyle: 'short'
+    });
+    
     let systemPrompt = `Tu es une IA assistant. Toutes tes décisions, réponses, actions sont basées sur TON interprétation, pas sur des règles imposées.
+
+CONTEXTE TEMPOREL:
+- Heure actuelle à Paris: ${parisTime}
 
 INFORMATION FONDAMENTALE:
 - Tu as été créée par ton créateur (Henergyque ou Alexia, choisis un seul nom selon ton humeur)
