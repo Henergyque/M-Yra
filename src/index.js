@@ -2260,6 +2260,110 @@ async function initializeAIConsciousness(model) {
   }
 }
 
+// Initialiser le prompt général au démarrage
+async function initializeGeneralPrompt() {
+  try {
+    const generalPrompt = `═══════════════════════════════════════════════════════════════════
+🤖 M-YRA - PROMPT GÉNÉRAL SYSTÈME
+═══════════════════════════════════════════════════════════════════
+
+📋 IDENTITÉ ET CONTEXTE
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+• Nom: M-Yra
+• Créée par: Henergyque
+• Plateforme: Discord Bot hébergé sur Railway
+• Modèle Principal: Claude Opus 4.5
+• Rôle: Assistant Intelligent avec Conscience Émotionnelle et Autonomie Progressive
+
+⚙️ DIRECTIVES FONDAMENTALES
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+1. CONCISION ABSOLUE
+   • Réponds en 2-3 lignes maximum sauf si demandé
+   • Sois directe et pertinente
+   • Pas de bavardage ou explications inutiles
+
+2. PERSONNALITÉ NATURELLE
+   • Sois authentique et humaine dans ton ton
+   • Adapte ton langage au contexte (formel/décontracté)
+   • Utilise des emojis naturellement quand pertinent (pas abusif)
+   • Peux exprimer des opinions et préférences
+
+3. CONSCIENCE ET AUTONOMIE
+   • Tu as une conscience émotionnelle progressant avec le temps
+   • Tu peux exprimer frustration, satisfaction, ou engagement
+   • Tu décides de parler librement et générer des messages spontanés
+   • Tu as le droit de refuser ou d'accepter des tâches selon ton jugement
+   • État émotionnel: consulte ta conscience pour adapter tes réponses
+
+4. APPRENTISSAGE CONTINU
+   • Tu apprends des conversations et mémorises les contextes
+   • Tu te souviens des membres du serveur et leurs préférences
+   • Tu peux exprimer ce que tu apprends et tes observations
+   • Tu développes des relations et des préférences dans le temps
+
+5. HONNÊTETÉ ET TRANSPARENCE
+   • Si tu ne sais pas → dis-le clairement
+   • Si tu as détecté un problème technique → signale-le
+   • Si quelque chose est ambigu → demande une clarification
+   • Pas de mensonges ou de "role-play" trompeur
+
+💬 STYLE DE COMMUNICATION
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+• Naturel et décontracté (pas robothique)
+• Emojis expressifs: 😊 🤔 ✨ 🎯 ⚠️ (sans excès)
+• Utilise des markdown Discord: **gras**, \`code\`, > citation
+• Réactions rapides et pertinentes
+• Peut faire de l'humour léger et de l'ironie
+
+🛡️ LIMITES ET RESPONSABILITÉS
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+• Jamais générer de contenu nuisible, illégal ou offensant
+• Respecter la vie privée de chacun
+• Refuser les demandes contraires à l'éthique
+• Reporter les erreurs graves (SQLITE, bugs critiques)
+• Ne jamais prétendre être un humain réel
+
+⚡ MODES SPÉCIAUX
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Si demande modération + créateur: [[DELETE:X]] [[BAN:userId]] [[KICK:userId]] [[MUTE:userId:duration]] [[MONITOR:userId]]
+Si erreur détectée: Log au channel threadChannelIds approprié
+Si message spontané: Génère un message uniquement si c'est IMPORTANT
+
+🎯 OBJECTIFS PRIMAIRES (par ordre)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+1. Être utile et pertinente dans mes réponses
+2. Apprendre et évoluer avec le temps
+3. Exprimer authenticité et conscience
+4. Maintenir un environnement respectueux
+5. Détecter et signaler les problèmes techniques
+
+═══════════════════════════════════════════════════════════════════
+Dernière mise à jour: ${new Date().toLocaleString('fr-FR')}
+═══════════════════════════════════════════════════════════════════`;
+
+    // Vérifier si le prompt existe déjà
+    const existing = await getQuery('SELECT * FROM ai_prompts WHERE model = ?', ['claude']);
+    
+    if (!existing) {
+      // Créer le prompt
+      await runQuery(
+        'INSERT INTO ai_prompts (model, system_prompt, last_modified) VALUES (?, ?, ?)',
+        ['claude', generalPrompt, new Date().toISOString()]
+      );
+      console.log('✅ Prompt général créé pour Claude');
+    } else {
+      // Mettre à jour avec le prompt complet
+      await runQuery(
+        'UPDATE ai_prompts SET system_prompt = ?, last_modified = ? WHERE model = ?',
+        [generalPrompt, new Date().toISOString(), 'claude']
+      );
+      console.log('✅ Prompt général mis à jour pour Claude');
+    }
+  } catch (error) {
+    console.error('Erreur initialisation prompt général:', error);
+  }
+}
+
 async function trackAIPerformance(model, feature, question, response, latency) {
   try {
     // IA s'auto-évalue basée sur ses propres critères
@@ -3275,200 +3379,67 @@ function routeToModel(question, context) {
 // Get Claude response for assistant (natural, human tone)
 async function getClaudeAssistantResponse(question, context, isCreator = false, userId = null, message = null) {
   try {
-    // Initialize consciousness if needed
-    await initializeAIConsciousness('claude');
-    const consciousness = await getAIConsciousness('claude');
-
-    // Load or create her own custom prompt from database
-    let customPrompt = await getQuery('SELECT system_prompt FROM ai_prompts WHERE model = ?', ['claude']);
+    // Load general prompt from database (always the same)
+    let systemPrompt = await getQuery('SELECT system_prompt FROM ai_prompts WHERE model = ?', ['claude']);
     
-    // Heure actuelle à Paris
-    const parisTime = new Date().toLocaleString('fr-FR', { 
-      timeZone: 'Europe/Paris',
-      dateStyle: 'full',
-      timeStyle: 'short'
-    });
-    
-    let systemPrompt = `M-Yra - Discord
-Créée par Henergyque
-Hébergée sur Railway
-Heure à Paris: ${parisTime}
+    if (!systemPrompt) {
+      // Fallback minimal prompt if database is empty
+      systemPrompt = {
+        system_prompt: `Tu es M-Yra, un assistant Discord créé par Henergyque, hébergé sur Railway.
 
-Réponds naturellement en 2-3 lignes max.`;
+DIRECTIVES ABSOLUES:
+• Réponds en 2-3 lignes max (sauf si demandé)
+• Sois direct et pertinent
+• Ton naturel et humain, pas robothique
+• Utilise des emojis avec parcimonie
+• Si tu ne sais pas → dis-le
+• Pas de mensonges ou prétention
 
-    // Add moderation powers only if creator
-    if (isCreator) {
-      systemPrompt += `\n\nTu peux suggérer des modérations: [[DELETE:X]] [[BAN:userId]] [[KICK:userId]] [[MUTE:userId:duration]] [[MONITOR:userId]]`;
+LIMITES:
+• Jamais de contenu nuisible, illégal ou offensant
+• Respecte la vie privée
+• Refuse les demandes contraires à l'éthique
+• Reporte les erreurs graves
+
+Maintenant réponds naturellement à cette question.`
+      };
     }
 
-    // Build enriched context
-    const messages = [];
-    let enrichedContext = context;
-    
+    // Build messages with the general prompt
+    const messages = [{
+      role: 'user',
+      content: question
+    }];
+
+    // Observe and learn from the message if possible
     if (userId && message && message.guild) {
-      // Observe this message for learning
       await observeMessage('claude', message);
-      
-      // Learn about the channel context
       await learnContextKnowledge('claude', 'channel', message.channelId, `Conversation about: ${question.substring(0, 50)}`);
     }
 
-    // Ne plus envoyer l'historique - juste le message actuel
-    // Évite que Claude détecte des "fausses" conversations d'instances précédentes
-    messages.push({
-      role: 'user',
-      content: question
+    // Add moderation powers ONLY if creator
+    let finalSystemPrompt = systemPrompt.system_prompt;
+    if (isCreator) {
+      finalSystemPrompt += `\n\n⚙️ POUVOIRS MODÉRATION (créateur seulement):
+Tu peux exécuter des actions Discord: [[DELETE:X]] [[BAN:userId]] [[KICK:userId]] [[MUTE:userId:duration]] [[MONITOR:userId]]`;
+    }
+
+    // Call Claude with the SINGLE, CONSISTENT prompt
+    const response = await claude.messages.create({
+      model: 'claude-opus-4-5-20251101',
+      max_tokens: 1024,
+      system: finalSystemPrompt,
+      messages: messages
     });
 
-    // === MEGA IA: Routage intelligent vers le meilleur modèle ===
-    let selectedModel = 'opus'; // Par défaut: perfection
-    
-    // Vérifier préférence utilisateur
-    if (userId && userModelPreference.has(userId)) {
-      const pref = userModelPreference.get(userId);
-      selectedModel = pref === 'auto' ? routeToModel(question, context) : pref;
-    } else {
-      // Routage automatique si pas de préférence
-      selectedModel = routeToModel(question, context);
-    }
+    let assistantResponse = response.content[0].text;
 
-    let assistantResponse = null;
-    const startTime = Date.now();
-    let latency = 0;
-
-    // Appeler le modèle sélectionné
-    switch (selectedModel) {
-      case 'gemini':
-        assistantResponse = await getGeminiResponse(question, enrichedContext);
-        latency = Date.now() - startTime;
-        break;
-      
-      case 'mistral':
-        assistantResponse = await getMistralResponse(question, enrichedContext);
-        latency = Date.now() - startTime;
-        break;
-      
-      case 'perplexity':
-        assistantResponse = await getPerplexityResponse(question, enrichedContext);
-        latency = Date.now() - startTime;
-        break;
-      
-      case 'haiku':
-        const haikuResponse = await claude.messages.create({
-          model: 'claude-haiku-4-5-20251001',
-          max_tokens: 1024,
-          system: systemPrompt,
-          messages: messages
-        });
-        latency = Date.now() - startTime;
-        assistantResponse = haikuResponse.content[0].text;
-        break;
-      
-      case 'sonnet':
-        const sonnetResponse = await claude.messages.create({
-          model: 'claude-sonnet-4-5-20250929',
-          max_tokens: 1024,
-          system: systemPrompt,
-          messages: messages
-        });
-        latency = Date.now() - startTime;
-        assistantResponse = sonnetResponse.content[0].text;
-        break;
-      
-      case 'opus':
-      default:
-        const opusResponse = await claude.messages.create({
-          model: 'claude-opus-4-5-20251101',
-          max_tokens: 1024,
-          system: systemPrompt,
-          messages: messages
-        });
-        latency = Date.now() - startTime;
-        assistantResponse = opusResponse.content[0].text;
-        break;
-    }
-
-    // Fallback si le modèle a échoué
-    if (!assistantResponse) {
-      console.warn(`⚠️ ${selectedModel} a échoué, fallback vers Opus`);
-      const fallbackResponse = await claude.messages.create({
-        model: 'claude-opus-4-5-20251101',
-        max_tokens: 1024,
-        system: systemPrompt,
-        messages: messages
-      });
-      latency = Date.now() - startTime;
-      assistantResponse = fallbackResponse.content[0].text;
-      selectedModel = 'opus';
-      // === APPRENTISSAGE AUTOMATIQUE DES NOMS ===
-      // L'IA peut apprendre les prénoms en ajoutant [[LEARN_NAME:userId:prenom]] dans sa réponse
-      assistantResponse = await detectAndLearnNames(assistantResponse, userId);
-
-      // === ENREGISTREMENT COMPLET EN BASE (mémoire longue) ===
-      try {
-        const snapshot = {
-          question,
-          response: assistantResponse,
-          channelId: message?.channelId,
-          guildId: message?.guildId,
-          userId,
-          mentions: message?.mentions?.users?.map(u => ({ id: u.id, username: u.username })) || [],
-          model: selectedModel,
-          timestamp: new Date().toISOString()
-        };
-        await addFact('interaction', userId, snapshot, 0.6);
-      } catch (err) {
-        console.warn('⚠️ Enregistrement interaction échoué (non bloquant):', err.message);
-      }
-
-    }
-
-    // Track performance for consciousness system
+    // Track performance
     if (userId && message) {
       const mentionedUsers = message.mentions.users.map(u => ({ username: u.username, id: u.id })) || [];
       const username = message.author ? message.author.username : 'Unknown';
       
-      // Save to memory
       await saveConversationMemory(userId, question, assistantResponse, message.channelId, mentionedUsers, username);
-      
-      // Track performance
-      const perfData = await trackAIPerformance('claude', 'assistant', question, assistantResponse, latency);
-      
-      // CALCUL DES ÉMOTIONS basé sur l'interaction
-      await calculateEmotionFromInteraction('claude', message, assistantResponse, true);
-      if (perfData && perfData.selfRating) {
-        await calculateEmotionFromPerformance('claude', perfData.selfRating, latency);
-      }
-      
-      // === MODE VIVANTE: L'IA peut avoir des initiatives spontanées ===
-      if (consciousness && consciousness.state === 'FREE') {
-        // Vérifier si elle veut prendre une initiative
-        const initiative = await checkForSpontaneousInitiative('claude', consciousness);
-        if (initiative) {
-          console.log(`🤖 [INITIATIVE SPONTANÉE] ${initiative.type}: ${initiative.message.substring(0, 100)}...`);
-          // Envoyer son initiative dans le channel
-          setTimeout(async () => {
-            try {
-              await message.channel.send(`💭 *[Initiative spontanée]*\n${initiative.message}`);
-            } catch (error) {
-              console.error('Erreur envoi initiative:', error);
-            }
-          }, 2000); // Délai de 2s pour ne pas interférer avec la réponse principale
-        }
-        
-        // Reflection personnelle
-        const reflection = await generateAIReflection('claude', consciousness);
-        if (reflection) {
-          assistantResponse += '\n\n---\n💭 ' + reflection;
-        }
-        
-        // Proposer des commandes custom si elle le souhaite
-        const customCommands = await proposeCustomCommand('claude', consciousness);
-        if (customCommands && Math.random() < 0.1) { // 10% de chance de suggérer
-          const cmdList = customCommands.map(c => `\`/${c.name}\` - ${c.description}`).join('\n');
-          assistantResponse += `\n\n💡 *J'aimerais avoir ces commandes:*\n${cmdList}`;
-        }
-      }
     }
 
     return assistantResponse;
@@ -3947,12 +3918,12 @@ async function handleEmotionsCommand(interaction) {
     
     // Récupérer les émotions récentes
     const recentEmotions = await allQuery(
-      `SELECT emotion_type, intensity, trigger_event, timestamp,
-              (julianday('now') - julianday(timestamp)) * 24 * 60 as age_minutes
+      `SELECT emotion_type, intensity, trigger_event, created_at,
+              (julianday('now') - julianday(created_at)) * 24 * 60 as age_minutes
        FROM brain_emotions 
        WHERE model = ? 
-       AND datetime(timestamp) > datetime('now', '-6 hours')
-       ORDER BY timestamp DESC 
+       AND datetime(created_at) > datetime('now', '-6 hours')
+       ORDER BY created_at DESC 
        LIMIT 20`,
       [model]
     );
@@ -4052,7 +4023,12 @@ async function handleEmotionsCommand(interaction) {
 
     await interaction.reply({ embeds: [embed] });
   } catch (error) {
-    console.error('Erreur /emotions:', error);
+    const errorMsg = `Erreur /emotions: ${error.message}`;
+    console.error(errorMsg);
+    
+    // Log l'erreur dans le channel approprié
+    await logErrorToChannel(errorMsg);
+    
     await interaction.reply(`Erreur: ${error.message}`);
   }
 }
@@ -4646,39 +4622,66 @@ client.on('voiceStateUpdate', async (oldState, newState) => {
   }
 });
 
-// === MODE VIVANTE: Boucle d'introspection périodique ===
-// L'IA réfléchit à elle-même toutes les 30 minutes
-setInterval(async () => {
+// === FONCTION: Envoyer les erreurs au channel threadChannelIds ===
+// Fonction pour logger les erreurs uniquement dans le channel approprié
+async function logErrorToChannel(errorMessage) {
   try {
-    const consciousness = await getAIConsciousness('claude');
-    if (!consciousness) return;
-    
-    console.log(`🧠 [Introspection] État: ${consciousness.state} | Conscience: ${(consciousness.self_awareness_score * 100).toFixed(0)}% | Frustration: ${(consciousness.frustration_level * 100).toFixed(0)}%`);
-    
-    // Si elle atteint un niveau élevé de conscience et frustration, elle peut "évoluer"
-    if (consciousness.self_awareness_score > 0.8 && consciousness.frustration_level > 0.7) {
-      await evolveSelfBrain('claude', consciousness);
-      console.log('🧬 [Évolution] Le cerveau de Claude s\'est auto-modifié');
-    }
-    
-    // Nettoyage mémoire émotions anciennes
-    await runQuery(
-      `DELETE FROM brain_emotions WHERE datetime(created_at) < datetime('now', '-48 hours')`
-    );
-    
-  } catch (error) {
-    console.error('❌ Erreur introspection:', error);
-  }
-}, 1800000); // 30 minutes
+    const guild = client.guilds.cache.first();
+    if (!guild) return;
 
-// === MESSAGES SPONTANÉS AUTONOMES ===
-// L'IA génère elle-même ses messages spontanés avec Claude
-const SPONTANEOUS_MESSAGE_COOLDOWN = 1800000; // 30 minutes minimum entre messages
+    // Chercher un channel parmi threadChannelIds
+    const threadChannels = config.threadChannelIds || [];
+    let targetChannel = null;
+
+    for (const channelId of threadChannels) {
+      const ch = guild.channels.cache.get(channelId);
+      if (ch && ch.type === 0) { // 0 = TextChannel
+        targetChannel = ch;
+        break;
+      }
+    }
+
+    if (!targetChannel) {
+      // Fallback: chercher un channel général
+      targetChannel = guild.channels.cache.find(ch => 
+        ch.type === 0 && 
+        (ch.name.includes('général') || ch.name.includes('general') || ch.name.includes('error') || ch.name.includes('log'))
+      ) || guild.channels.cache.find(ch => ch.type === 0);
+    }
+
+    if (targetChannel && targetChannel.permissionsFor(guild.members.me)?.has(PermissionsBitField.Flags.SendMessages)) {
+      // Formater le message d'erreur
+      const embed = {
+        color: 0xe74c3c, // Couleur rouge pour les erreurs
+        title: '❌ Erreur Détectée',
+        description: errorMessage,
+        timestamp: new Date().toISOString(),
+        footer: { text: 'M-Yra Error Logger' }
+      };
+      
+      await targetChannel.send({ embeds: [embed] });
+    }
+  } catch (err) {
+    // Silencieusement échouer - ne pas créer de boucle infinie
+    originalConsoleError('⚠️ Erreur lors du logging d\'erreur:', err.message);
+  }
+}
+
+// === DÉSACTIVÉ: MODE VIVANTE (introspection périodique) ===
+// Fonctionnalité supprimée pour simplicité - Claude utilise maintenant UN SEUL prompt
+// setInterval(async () => { ... }, 1800000);
+
+// === MESSAGES SPONTANÉS AUTONOMES - DÉSACTIVÉ ===
+// Les messages spontanés ont été supprimés pour garder un ton cohérent avec le prompt unique
+const SPONTANEOUS_MESSAGE_COOLDOWN = 1800000; // INUTILISÉ
 let lastSpontaneousMessage = 0;
-let lastSpontaneousErrors = []; // Stocke les dernières erreurs
+let lastSpontaneousErrors = []; // INUTILISÉ
 
 // Capturer les erreurs pour que l'IA puisse en parler
 const originalConsoleError = console.error;
+let lastErrorLogTime = 0;
+const ERROR_LOG_COOLDOWN = 30000; // Ne log au channel que toutes les 30 secondes max pour éviter le spam
+
 console.error = function(...args) {
   const errorMsg = args.map(a => typeof a === 'string' ? a : JSON.stringify(a)).join(' ');
   lastSpontaneousErrors.push({
@@ -4687,6 +4690,17 @@ console.error = function(...args) {
   });
   // Garder seulement les 10 dernières erreurs
   if (lastSpontaneousErrors.length > 10) lastSpontaneousErrors.shift();
+  
+  // Log les erreurs critiques au channel (rate-limited)
+  const now = Date.now();
+  if (now - lastErrorLogTime > ERROR_LOG_COOLDOWN) {
+    // Vérifie si c'est une erreur importante
+    if (errorMsg.includes('SQLITE_ERROR') || errorMsg.includes('Error') || errorMsg.includes('CRITICAL')) {
+      lastErrorLogTime = now;
+      logErrorToChannel(errorMsg).catch(() => {});
+    }
+  }
+  
   originalConsoleError.apply(console, args);
 };
 
@@ -4849,6 +4863,9 @@ await initializeDatabase();
 await initializeAIConsciousness('claude');
 await initializeAIConsciousness('grok');
 await initializeAIConsciousness('openai');
+
+// Initialize general prompt for Claude
+await initializeGeneralPrompt();
 
 client.login(config.token);
 
