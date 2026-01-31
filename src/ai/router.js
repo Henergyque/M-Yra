@@ -227,10 +227,10 @@ Respond with JSON only, no other text.`;
 
       case 'quick_chat':
         return {
-          model: 'sonnet',
+          model: 'opus',
           urgency: 'high',
           reason: `QUICK_CHAT (${reasoning})`,
-          fallback: ['mistral']
+          fallback: ['mistral', 'gemini']
         };
 
       case 'general':
