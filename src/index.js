@@ -1249,18 +1249,9 @@ async function handleAIAssistant(message) {
           const cleanResponse = assistantResponse.replace(/\[\[QUIZ:[^\]]+\]\]/, '').trim();
           if (cleanResponse) await message.channel.send(cleanResponse);
           
-          // Simulate interaction for quiz handler
-          const mockInteraction = {
-            channelId: message.channelId,
-            channel: message.channel,
-            user: message.author,
-            guild: message.guild,
-            reply: async (content) => await message.channel.send(typeof content === 'string' ? content : content.content),
-            editReply: async (content) => await message.channel.send(typeof content === 'string' ? content : content.content),
-            deferReply: async () => {}
-          };
-          
-          await handleQuizCommand(message, theme);
+          // Note: Quiz nécessite un système de vote interactif
+          // Pour l'instant, on informe juste l'utilisateur
+          await message.channel.send(`🎯 Pour lancer un quiz, utilise la commande \`!quiz\` dans le channel.`);
           return;
         }
 
@@ -1270,8 +1261,28 @@ async function handleAIAssistant(message) {
           const cleanResponse = assistantResponse.replace(/\[\[STORY:[^\]]+\]\]/, '').trim();
           if (cleanResponse) await message.channel.send(cleanResponse);
           
-          // Start story session
-          await setActiveStory(message.channelId, theme, mode);
+          // Create complete story object like handleStorySlashStart does
+          const story = {
+            theme,
+            mode,
+            phrases: [],
+            contributors: [],
+            lastContributorId: message.author.id,
+            startedAt: new Date().toISOString(),
+            roles: {},
+            waitingRoster: {},
+            isWaiting: mode === 'roleplay' ? 1 : 0
+          };
+
+          setActiveStory(message.channelId, story);
+
+          // Save to DB
+          await runQuery(
+            `INSERT OR REPLACE INTO story_sessions (channel_id, theme, mode, phrases, contributors, roles, last_contributor_id, started_at, phrase_count, waiting_roster, is_waiting)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            [message.channelId, theme, mode, JSON.stringify([]), JSON.stringify([]), JSON.stringify({}), message.author.id, story.startedAt, 0, JSON.stringify({}), story.isWaiting]
+          );
+
           await message.channel.send(`📖 **Histoire démarrée:** ${theme} (mode: ${mode})\nCommencez à contribuer!`);
           return;
         }
