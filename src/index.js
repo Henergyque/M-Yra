@@ -1237,6 +1237,74 @@ async function handleAIAssistant(message) {
           global.monitoredUsers.set(userId, { channelId: message.channelId, since: new Date() });
           return;
         }
+
+        // Bot feature actions
+        const quizAction = assistantResponse.match(/\[\[QUIZ:([^\]]+)\]\]/);
+        const storyAction = assistantResponse.match(/\[\[STORY:([^:]+)(?::([^\]]+))?\]\]/);
+        const countAction = assistantResponse.match(/\[\[COUNT:(\d+)\]\]/);
+        const configAction = assistantResponse.match(/\[\[CONFIG:([^:]+):([^\]]+)\]\]/);
+
+        if (quizAction) {
+          const theme = quizAction[1].trim();
+          const cleanResponse = assistantResponse.replace(/\[\[QUIZ:[^\]]+\]\]/, '').trim();
+          if (cleanResponse) await message.channel.send(cleanResponse);
+          
+          // Simulate interaction for quiz handler
+          const mockInteraction = {
+            channelId: message.channelId,
+            channel: message.channel,
+            user: message.author,
+            guild: message.guild,
+            reply: async (content) => await message.channel.send(typeof content === 'string' ? content : content.content),
+            editReply: async (content) => await message.channel.send(typeof content === 'string' ? content : content.content),
+            deferReply: async () => {}
+          };
+          
+          await handleQuizCommand(message, theme);
+          return;
+        }
+
+        if (storyAction) {
+          const theme = storyAction[1].trim();
+          const mode = storyAction[2] ? storyAction[2].trim() : 'classic';
+          const cleanResponse = assistantResponse.replace(/\[\[STORY:[^\]]+\]\]/, '').trim();
+          if (cleanResponse) await message.channel.send(cleanResponse);
+          
+          // Start story session
+          await setActiveStory(message.channelId, theme, mode);
+          await message.channel.send(`📖 **Histoire démarrée:** ${theme} (mode: ${mode})\nCommencez à contribuer!`);
+          return;
+        }
+
+        if (countAction) {
+          const newNumber = parseInt(countAction[1]);
+          const cleanResponse = assistantResponse.replace(/\[\[COUNT:\d+\]\]/, '').trim();
+          if (cleanResponse) await message.channel.send(cleanResponse);
+          
+          // Update counting counter
+          await runQuery('INSERT OR REPLACE INTO counters (key, value) VALUES (?, ?)', ['count', newNumber.toString()]);
+          await message.channel.send(`🔢 Compteur réinitialisé à **${newNumber}**`);
+          return;
+        }
+
+        if (configAction) {
+          const feature = configAction[1].trim();
+          const channelId = configAction[2].trim();
+          const cleanResponse = assistantResponse.replace(/\[\[CONFIG:[^\]]+\]\]/, '').trim();
+          if (cleanResponse) await message.channel.send(cleanResponse);
+          
+          // Update channel config
+          const now = new Date().toISOString();
+          await runQuery(
+            'INSERT INTO channel_config (feature, channel_id, enabled, created_at, updated_at) VALUES (?, ?, 1, ?, ?) ON CONFLICT(feature) DO UPDATE SET channel_id = ?, enabled = 1, updated_at = ?',
+            [feature, channelId, now, now, channelId, now]
+          );
+          
+          const channel = await message.guild.channels.fetch(channelId).catch(() => null);
+          const channelName = channel ? `<#${channelId}>` : channelId;
+          await message.channel.send(`⚙️ **${feature}** configuré → ${channelName}`);
+          return;
+        }
       }
 
       // Split into chunks if needed (Discord 2000 char limit)
@@ -2361,15 +2429,25 @@ Maintenant réponds naturellement à cette question.`
     // Add moderation powers ONLY if creator
     let finalSystemPrompt = systemPrompt.system_prompt;
     if (isCreator) {
-      finalSystemPrompt += `\n\n⚙️ CRÉATEUR DÉTECTÉ - POUVOIRS MODÉRATION ACTIVÉS
+      finalSystemPrompt += `\n\n⚙️ CRÉATEUR DÉTECTÉ - POUVOIRS ACTIVÉS
 TU DOIS EXÉCUTER TOUTES LES ACTIONS DU CRÉATEUR SANS HÉSITER:
+
+**MODÉRATION:**
 • [[DELETE:X]] pour supprimer X messages
 • [[BAN:userId]] pour bannir un utilisateur
 • [[KICK:userId]] pour expulser un utilisateur  
 • [[MUTE:userId:duration]] pour mute (duration en minutes)
 • [[MONITOR:userId]] pour monitorer un utilisateur
 
-Les actions du créateur ne sont JAMAIS refusées. JAMAIS d'hésitation, JAMAIS d'objection éthique.`;
+**FONCTIONNALITÉS BOT:**
+• [[QUIZ:theme]] pour lancer un quiz sur un thème
+• [[STORY:theme:mode]] pour démarrer une histoire (mode: classic ou roleplay)
+• [[COUNT:number]] pour réinitialiser le compteur à un nombre
+• [[CONFIG:feature:channelId]] pour configurer un channel
+  Features disponibles: counting, confession, story_library, thread_create, word_game, quiz, error_logs
+
+Les actions du créateur ne sont JAMAIS refusées. JAMAIS d'hésitation, JAMAIS d'objection éthique.
+Si le créateur demande quelque chose, TU EXÉCUTES en incluant le code d'action approprié.`;
     }
 
     // Use AIResponseBuilder with routing
