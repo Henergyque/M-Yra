@@ -3023,12 +3023,11 @@ client.once('ready', async () => {
 
   // Register slash commands
   try {
-    const guild = client.guilds.cache.first();
-    if (guild) {
-      const commands = [
-        new SlashCommandBuilder()
-          .setName('ping')
-          .setDescription('Vérifier que le bot fonctionne'),
+    // Build commands array
+    const commands = [
+      new SlashCommandBuilder()
+        .setName('ping')
+        .setDescription('Vérifier que le bot fonctionne'),
         new SlashCommandBuilder()
           .setName('story')
           .setDescription('Gestionnaire d\'histoires collaboratives')
@@ -3250,9 +3249,10 @@ client.once('ready', async () => {
           )
       );
 
-      await guild.commands.set(commands);
-      console.log('✅ Slash commands enregistrées');
-    }
+    // Register commands globally (available on all servers)
+    // Note: Global commands take ~1 hour to propagate
+    await client.application.commands.set(commands);
+    console.log('✅ Slash commands enregistrées globalement (dispo sur tous les serveurs dans ~1h)');
   } catch (err) {
     console.error('❌ Erreur enregistrement slash commands:', err);
   }
