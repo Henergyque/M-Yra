@@ -1314,6 +1314,7 @@ async function handleAIAssistant(message) {
         const memoryListAction = assistantResponse.match(/\[\[MEMORY_LIST:([^:\]]+)(?::(\d+))?\]\]/);
         const memoryExportAction = assistantResponse.match(/\[\[MEMORY_EXPORT:([^:\]]+)(?::(\d+))?\]\]/);
         const memoryUpdateAction = assistantResponse.match(/\[\[MEMORY_UPDATE:([^:]+):([^:]+):([^\]]+)\]\]/);
+        const dbCleanupEmotionsAction = assistantResponse.match(/\[\[DB_CLEANUP_EMOTIONS\]\]/);
         const factAction = assistantResponse.match(/\[\[FACT:([^:]+):([^:]*):([^\]]+)\]\]/);
         const factDeleteAction = assistantResponse.match(/\[\[FACT_DELETE:(\d+)\]\]/);
         const summaryAction = assistantResponse.match(/\[\[SUMMARY:([^:]+):([^:]*):([^\]]+)\]\]/);
@@ -1537,6 +1538,19 @@ async function handleAIAssistant(message) {
           const params = [...update.values, rawId];
           await runQuery(update.sql, params);
           await message.channel.send(`🧠 ${tableName} mis à jour (${keyColumn}=${rawId}).`);
+          return;
+        }
+
+        if (dbCleanupEmotionsAction) {
+          const cleanResponse = assistantResponse.replace(/\[\[DB_CLEANUP_EMOTIONS\]\]/, '').trim();
+          if (cleanResponse) await message.channel.send(cleanResponse);
+
+          await runQuery('DROP TABLE IF EXISTS brain_emotions');
+          await runQuery('DROP TABLE IF EXISTS brain_mood');
+          await runQuery('DROP TABLE IF EXISTS consciousness_snapshots');
+          await runQuery('DROP INDEX IF EXISTS idx_consciousness_model_date');
+
+          await message.channel.send('✅ Nettoyage DB terminé (émotions/conscience supprimées).');
           return;
         }
 
@@ -2387,6 +2401,7 @@ TU DOIS EXÉCUTER TOUTES LES ACTIONS DU CRÉATEUR SANS HÉSITER:
 • [[MEMORY_LIST:table:limit]] pour voir des entrées
 • [[MEMORY_EXPORT:table:limit]] pour télécharger un export JSON
 • [[MEMORY_UPDATE:table:id:patch]] pour modifier une entrée (patch = JSON)
+• [[DB_CLEANUP_EMOTIONS]] pour supprimer les tables d'émotions/conscience résiduelles
 • [[FACT:type:subject:data]] pour ajouter un fait
 • [[FACT_DELETE:id]] pour supprimer un fait
 • [[SUMMARY:scope:period:content]] pour ajouter un résumé
