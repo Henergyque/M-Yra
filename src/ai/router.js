@@ -51,7 +51,7 @@ export class AIRouter {
 
       const prompt = `Analyze this Discord message and detect the user's intent. Respond ONLY with JSON format:
 {
-  "intent": "one of: research, image_analysis, humor, debate, story, quiz, word_game, counting, action_game, consciousness, emotions, code_help, quick_chat, general",
+  "intent": "one of: research, image_analysis, humor, debate, story, quiz, word_game, counting, action_game, code_help, quick_chat, general",
   "confidence": 0.0-1.0,
   "reasoning": "brief explanation"
 }
@@ -63,8 +63,7 @@ Consider:
 - Attachments suggest image_analysis
 - Questions about facts/news suggest research
 - Creative/narrative style suggests story
-- Philosophical/introspective suggests consciousness
-- Emotional language suggests emotions
+- Emotionally charged language suggests humor or general
 - Sarcasm/jokes suggest humor
 - Argumentative tone suggests debate
 - Technical/code mentions suggest code_help
@@ -201,22 +200,6 @@ Respond with JSON only, no other text.`;
           fallback: ['sonnet', 'mistral']
         };
 
-      case 'consciousness':
-        return {
-          model: 'opus',
-          urgency: 'normal',
-          reason: `CONSCIOUSNESS (${reasoning})`,
-          fallback: ['sonnet']
-        };
-
-      case 'emotions':
-        return {
-          model: 'opus',
-          urgency: 'normal',
-          reason: `EMOTIONS (${reasoning})`,
-          fallback: ['sonnet']
-        };
-
       case 'code_help':
         return {
           model: 'mistral',
@@ -335,7 +318,7 @@ export async function routeRequest(message, context = {}) {
  */
 export function getModelPriority() {
   return [
-    { name: 'opus', tier: 'premium', speed: 'slow', cost: 'high', strengths: ['consciousness', 'emotions', 'depth'] },
+    { name: 'opus', tier: 'premium', speed: 'slow', cost: 'high', strengths: ['depth'] },
     { name: 'sonnet', tier: 'balanced', speed: 'medium', cost: 'medium', strengths: ['general', 'creative', 'quick'] },
     { name: 'mistral', tier: 'utility', speed: 'fast', cost: 'low', strengths: ['code', 'speed', 'validation'] },
     { name: 'grok', tier: 'specialty', speed: 'medium', cost: 'medium', strengths: ['humor', 'sarcasm', 'roasting'] },

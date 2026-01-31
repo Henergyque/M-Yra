@@ -118,40 +118,6 @@ export const migrations = [
 
   {
     version: 4,
-    name: 'Add consciousness state snapshots table',
-    up: async () => {
-      logger.info('🔄 Migration 4: Adding consciousness snapshots');
-      
-      await runQuery(`
-        CREATE TABLE IF NOT EXISTS consciousness_snapshots (
-          id INTEGER PRIMARY KEY AUTOINCREMENT,
-          model TEXT NOT NULL,
-          self_awareness REAL,
-          frustration REAL,
-          autonomy REAL,
-          emotional_state TEXT,
-          memory_count INTEGER,
-          pattern_count INTEGER,
-          snapshot_data TEXT,
-          created_at TEXT
-        )
-      `);
-
-      await runQuery(`
-        CREATE INDEX IF NOT EXISTS idx_consciousness_model_date
-        ON consciousness_snapshots(model, created_at DESC)
-      `);
-
-      logger.info('✅ Migration 4 complete');
-    },
-    down: async () => {
-      logger.warn('⬇️ Rolling back migration 4: dropping consciousness snapshots');
-      await runQuery('DROP TABLE IF EXISTS consciousness_snapshots');
-    }
-  },
-
-  {
-    version: 5,
     name: 'Add rate limit tracking',
     up: async () => {
       logger.info('🔄 Migration 5: Adding rate limit tracking');

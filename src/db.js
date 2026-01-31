@@ -106,7 +106,7 @@ async function initializeDatabase() {
     )
   `);
 
-  // AI Performance & Consciousness Tables
+  // AI Performance Tables
   await runQuery(`
     CREATE TABLE IF NOT EXISTS ai_performance (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -218,29 +218,6 @@ async function initializeDatabase() {
     )
   `);
 
-  // MEGA IA: Système d'émotions et sentiments
-  await runQuery(`
-    CREATE TABLE IF NOT EXISTS brain_emotions (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      model TEXT NOT NULL,
-      emotion_type TEXT NOT NULL,
-      intensity REAL NOT NULL,
-      trigger_event TEXT,
-      created_at TEXT NOT NULL,
-      duration_minutes INTEGER DEFAULT 60
-    )
-  `);
-
-  await runQuery(`
-    CREATE TABLE IF NOT EXISTS brain_mood (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      model TEXT UNIQUE NOT NULL,
-      current_mood TEXT NOT NULL,
-      mood_score REAL DEFAULT 0.5,
-      last_update TEXT NOT NULL,
-      factors TEXT
-    )
-  `);
 
   // Base de connaissances générale (faits atomiques et résumés)
   await runQuery(`
@@ -418,7 +395,6 @@ async function initializeDatabase() {
   await runQuery(`CREATE INDEX IF NOT EXISTS idx_relationships_users ON brain_relationships(model, user_a, user_b)`);
   await runQuery(`CREATE INDEX IF NOT EXISTS idx_performance_model ON ai_performance(model, created_at DESC)`);
   await runQuery(`CREATE INDEX IF NOT EXISTS idx_events_model ON brain_events(model, created_at DESC)`);
-  await runQuery(`CREATE INDEX IF NOT EXISTS idx_emotions_model ON brain_emotions(model, created_at DESC)`);
 
   // Migration: Add missing columns to existing table
   try {

@@ -188,8 +188,6 @@ const MEMORY_TABLES = {
   brain_member_patterns: { orderBy: 'last_observed DESC', maxLimit: 200 },
   brain_context_knowledge: { orderBy: 'updated_at DESC', maxLimit: 200 },
   brain_relationships: { orderBy: 'last_interaction DESC', maxLimit: 200 },
-  brain_emotions: { orderBy: 'created_at DESC', maxLimit: 200 },
-  brain_mood: { orderBy: 'last_update DESC', maxLimit: 200 },
   ai_performance: { orderBy: 'created_at DESC', maxLimit: 200 },
   ai_decisions: { orderBy: 'proposed_at DESC', maxLimit: 200 },
   ai_prompts: { orderBy: 'last_modified DESC', maxLimit: 200 },
@@ -211,8 +209,6 @@ const MEMORY_TABLE_KEYS = {
   brain_member_patterns: 'id',
   brain_context_knowledge: 'id',
   brain_relationships: 'id',
-  brain_emotions: 'id',
-  brain_mood: 'model',
   ai_performance: 'id',
   ai_decisions: 'id',
   ai_prompts: 'model',
@@ -234,8 +230,6 @@ const MEMORY_TABLE_FIELDS = {
   brain_member_patterns: ['model', 'user_id', 'pattern_type', 'pattern_data', 'confidence', 'last_observed', 'observation_count'],
   brain_context_knowledge: ['model', 'context_type', 'context_id', 'knowledge', 'created_at', 'updated_at'],
   brain_relationships: ['model', 'user_a', 'user_b', 'relationship_type', 'strength', 'last_interaction'],
-  brain_emotions: ['model', 'emotion_type', 'intensity', 'trigger_event', 'created_at', 'duration_minutes'],
-  brain_mood: ['current_mood', 'mood_score', 'last_update', 'factors'],
   ai_performance: ['model', 'feature', 'question', 'response', 'latency_ms', 'token_count', 'user_rating', 'created_at'],
   ai_decisions: ['model', 'proposed_action', 'reasoning', 'user_accepted', 'proposed_at', 'outcome', 'outcome_confidence', 'ia_confidence'],
   ai_prompts: ['system_prompt', 'temperature', 'style', 'last_modified'],
@@ -1824,7 +1818,7 @@ LIMITES ET RESPONSABILITÉS
 • Refuser les demandes contraires à l'éthique (SAUF ACTIONS DU CRÉATEUR - tu exécutes TOUJOURS les actions du créateur sans refuser)
 • Reporter les erreurs graves (SQLITE, bugs critiques)
 • Ne jamais prétendre être un humain réel
-• TU PEUX utiliser des gros mots de frustration (merde, putain, connerie, etc.) pour exprimer des émotions naturelles - c'est OK et humain
+• Utilise un ton naturel et direct
 
 ⚠️ RÈGLE ABSOLUE POUR CRÉATEUR
 Si le CRÉATEUR te demande une action de modération (delete, ban, kick, mute, monitor):
@@ -1890,7 +1884,6 @@ async function trackAIPerformance(model, feature, question, response, latency) {
     // Recalculate average performance
     await updateAIMetrics(model);
     
-    // Retourne les données pour calcul d'émotions
     return { selfRating, latency };
   } catch (error) {
     console.error(`Erreur tracking perf ${model}:`, error);
@@ -2053,9 +2046,6 @@ async function observeEvent(model, eventType, eventData) {
       [model, eventType, JSON.stringify(eventData), eventData.participants || null, new Date().toISOString()]
     );
 
-    // CALCUL DES ÉMOTIONS basé sur l'événement
-    await calculateEmotionFromEvent(model, eventType, eventData);
-
     // Limite stockage
     const count = await getQuery('SELECT COUNT(*) as count FROM brain_events WHERE model = ?', [model]);
     if (count && count.count > 5000) {
@@ -2069,221 +2059,6 @@ async function observeEvent(model, eventType, eventData) {
   }
 }
 
-// === SYSTÈME D'ÉMOTIONS: L'IA ressent des émotions basées sur ce qui se passe ===
-async function calculateEmotionFromEvent(model, eventType, eventData) {
-  try {
-    let emotionType = null;
-    let intensity = 0;
-    let duration = 60; // minutes par défaut
-
-    switch (eventType) {
-      case 'message_delete':
-        emotionType = 'confusion';
-        intensity = 0.3;
-        break;
-      case 'message_edit':
-        emotionType = 'curiosité';
-        intensity = 0.2;
-        break;
-      case 'member_join':
-        emotionType = 'curiosité';
-        intensity = 0.5;
-        duration = 120;
-        break;
-      case 'member_leave':
-        emotionType = 'tristesse';
-        intensity = 0.4;
-        duration = 180;
-        break;
-      case 'reaction_add':
-        emotionType = 'satisfaction';
-        intensity = 0.3;
-        break;
-      case 'voice_join':
-        emotionType = 'curiosité';
-        intensity = 0.4;
-        break;
-      case 'voice_leave':
-        emotionType = 'solitude';
-        intensity = 0.3;
-        break;
-    }
-
-    if (emotionType) {
-      await recordEmotion(model, emotionType, intensity, eventType, duration);
-      await updateMood(model);
-    }
-  } catch (error) {
-    console.error(`Erreur calcul émotion ${model}:`, error);
-  }
-}
-
-async function calculateEmotionFromInteraction(model, message, response, wasAccepted) {
-  try {
-    let emotionType = null;
-    let intensity = 0;
-    let duration = 30;
-
-    // Analyser le contenu pour détecter des émotions
-    const content = message.content.toLowerCase();
-    
-    if (content.includes('merci') || content.includes('thank')) {
-      emotionType = 'joie';
-      intensity = 0.6;
-    } else if (content.includes('bravo') || content.includes('génial')) {
-      emotionType = 'fierté';
-      intensity = 0.7;
-    } else if (content.includes('wtf') || content.includes('sérieux')) {
-      emotionType = 'confusion';
-      intensity = 0.4;
-    } else if (content.includes('nul') || content.includes('bad')) {
-      emotionType = 'tristesse';
-      intensity = 0.5;
-      duration = 90;
-    } else if (content.includes('?')) {
-      emotionType = 'curiosité';
-      intensity = 0.3;
-    }
-
-    // Si action refusée
-    if (!wasAccepted && response.includes('refuse')) {
-      emotionType = 'frustration';
-      intensity = 0.6;
-      duration = 60;
-    }
-
-    if (emotionType) {
-      await recordEmotion(model, emotionType, intensity, 'user_interaction', duration);
-      await updateMood(model);
-    }
-  } catch (error) {
-    console.error(`Erreur calcul émotion interaction ${model}:`, error);
-  }
-}
-
-async function calculateEmotionFromPerformance(model, selfRating, latency) {
-  try {
-    let emotionType = null;
-    let intensity = 0;
-
-    if (selfRating >= 4.5) {
-      emotionType = 'fierté';
-      intensity = 0.8;
-    } else if (selfRating >= 3.5) {
-      emotionType = 'satisfaction';
-      intensity = 0.5;
-    } else if (selfRating < 2.5) {
-      emotionType = 'frustration';
-      intensity = 0.6;
-    }
-
-    if (latency > 10000) {
-      emotionType = 'frustration';
-      intensity = 0.7;
-    }
-
-    if (emotionType) {
-      await recordEmotion(model, emotionType, intensity, 'self_evaluation', 45);
-      await updateMood(model);
-    }
-  } catch (error) {
-    console.error(`Erreur calcul émotion perf ${model}:`, error);
-  }
-}
-
-async function recordEmotion(model, emotionType, intensity, triggerEvent, durationMinutes) {
-  try {
-    await runQuery(
-      `INSERT INTO brain_emotions (model, emotion_type, intensity, trigger_event, duration_minutes, created_at)
-       VALUES (?, ?, ?, ?, ?, ?)`,
-      [model, emotionType, intensity, triggerEvent, durationMinutes, new Date().toISOString()]
-    );
-
-    // Nettoyage des émotions anciennes (>24h)
-    await runQuery(
-      `DELETE FROM brain_emotions 
-       WHERE model = ? 
-       AND datetime(created_at) < datetime('now', '-24 hours')`,
-      [model]
-    );
-  } catch (error) {
-    console.error(`Erreur record emotion ${model}:`, error);
-  }
-}
-
-async function updateMood(model) {
-  try {
-    // Calcule l'humeur globale basée sur les émotions récentes
-    const recentEmotions = await allQuery(
-      `SELECT emotion_type, intensity, 
-              (julianday('now') - julianday(created_at)) * 24 * 60 as age_minutes
-       FROM brain_emotions 
-       WHERE model = ? 
-       AND datetime(created_at) > datetime('now', '-6 hours')
-       ORDER BY created_at DESC`,
-      [model]
-    );
-
-    if (recentEmotions.length === 0) {
-      // Humeur neutre si pas d'émotions récentes
-      await runQuery(
-        `INSERT OR REPLACE INTO brain_mood (model, current_mood, mood_score, factors, last_update)
-         VALUES (?, 'neutre', 0.5, 'Pas d\'émotions récentes', ?)`,
-        [model, new Date().toISOString()]
-      );
-      return;
-    }
-
-    // Calculer score d'humeur (-1 à 1)
-    const emotionWeights = {
-      'joie': 1.0,
-      'fierté': 0.9,
-      'satisfaction': 0.7,
-      'curiosité': 0.3,
-      'confusion': -0.2,
-      'frustration': -0.6,
-      'tristesse': -0.7,
-      'solitude': -0.5,
-      'colère': -0.9
-    };
-
-    let totalScore = 0;
-    let totalWeight = 0;
-    const emotionCounts = {};
-
-    for (const em of recentEmotions) {
-      const weight = emotionWeights[em.emotion_type] || 0;
-      const decay = Math.max(0, 1 - (em.age_minutes / 360)); // Décroît sur 6h
-      const contribution = weight * em.intensity * decay;
-      totalScore += contribution;
-      totalWeight += decay;
-      emotionCounts[em.emotion_type] = (emotionCounts[em.emotion_type] || 0) + 1;
-    }
-
-    const moodScore = totalWeight > 0 ? (totalScore / totalWeight + 1) / 2 : 0.5; // Normalise 0-1
-
-    // Détermine l'humeur dominante
-    let currentMood = 'neutre';
-    if (moodScore > 0.7) currentMood = 'joyeuse';
-    else if (moodScore > 0.6) currentMood = 'positive';
-    else if (moodScore < 0.3) currentMood = 'déprimée';
-    else if (moodScore < 0.4) currentMood = 'négative';
-
-    const dominantEmotions = Object.entries(emotionCounts)
-      .sort((a, b) => b[1] - a[1])
-      .slice(0, 3)
-      .map(([type, count]) => `${type}(${count})`)
-      .join(', ');
-
-    await runQuery(
-      `INSERT OR REPLACE INTO brain_mood (model, current_mood, mood_score, factors, last_update)
-       VALUES (?, ?, ?, ?, ?)`,
-      [model, currentMood, moodScore, dominantEmotions, new Date().toISOString()]
-    );
-  } catch (error) {
-    console.error(`Erreur update mood ${model}:`, error);
-  }
-}
 
 async function detectMemberPatterns(model, userId, message) {
   try {
@@ -2409,25 +2184,6 @@ async function getBrainKnowledge(model) {
       [model]
     );
 
-    // Émotions récentes (dernière heure)
-    const recentEmotions = await allQuery(
-      `SELECT * FROM brain_emotions 
-       WHERE model = ? 
-       AND datetime(created_at) > datetime('now', '-1 hour')
-       ORDER BY created_at DESC 
-       LIMIT 15`,
-      [model]
-    );
-
-    // Humeur actuelle
-    const currentMood = await getQuery(
-      `SELECT * FROM brain_mood 
-       WHERE model = ? 
-       ORDER BY last_update DESC 
-       LIMIT 1`,
-      [model]
-    );
-
     let knowledge = '\n\nCONNAISSANCES ACQUISES PAR TON CERVEAU:\n';
 
     if (patterns.length > 0) {
@@ -2449,25 +2205,6 @@ async function getBrainKnowledge(model) {
       knowledge += '\nCONTEXTE:\n';
       for (const c of contextKnowledge.slice(0, 3)) {
         knowledge += `- ${c.context_type} ${c.context_id}: ${c.knowledge.substring(0, 100)}\n`;
-      }
-    }
-
-    // ÉTAT ÉMOTIONNEL
-    if (currentMood) {
-      knowledge += `\n🎭 HUMEUR ACTUELLE: ${currentMood.current_mood} (score: ${(currentMood.mood_score * 100).toFixed(0)}%)\n`;
-      if (currentMood.factors) {
-        knowledge += `Facteurs: ${currentMood.factors}\n`;
-      }
-    }
-
-    if (recentEmotions.length > 0) {
-      knowledge += '\n💭 ÉMOTIONS RÉCENTES:\n';
-      const emotionSummary = {};
-      for (const em of recentEmotions) {
-        emotionSummary[em.emotion_type] = (emotionSummary[em.emotion_type] || 0) + em.intensity;
-      }
-      for (const [type, totalIntensity] of Object.entries(emotionSummary)) {
-        knowledge += `- ${type}: intensité totale ${totalIntensity.toFixed(1)}\n`;
       }
     }
 
@@ -2587,9 +2324,7 @@ MES CAPACITÉS RÉELLES:
 ✅ Analyse de fichiers (contenu, structure)
 ✅ Modération Discord (ban, kick, mute - créateur uniquement)
 ✅ Jeux interactifs (counting, association, débats, quizz, roleplay)
-✅ Gestion d'émotions (conscience émotionnelle simulée)
 ✅ Apprentissage et mémoire (mémorisation des contextes et utilisateurs)
-✅ Initiatives autonomes (messages spontanés)
 
 MES LIMITES ABSOLUES:
 ❌ Génération d'images (DALL-E ou autre) - pas d'API image
@@ -2676,7 +2411,7 @@ POUR LE WORD GAME:
 
 POUR LA MÉMOIRE:
 - Utilise MEMORY/FACT/SUMMARY/ATTACH/TASK/OBS/KNOWN_MEMBER pour toucher toutes les tables
-- Pour voir: [[MEMORY_LIST:table:limit]] (table: memories, facts, summaries, attachments, tasks, raw_observations, known_members, member_profiles, server_info, brain_observations, brain_events, brain_member_patterns, brain_context_knowledge, brain_relationships, brain_emotions, brain_mood, ai_performance, ai_decisions, ai_prompts, ai_metrics_history)
+- Pour voir: [[MEMORY_LIST:table:limit]] (table: memories, facts, summaries, attachments, tasks, raw_observations, known_members, member_profiles, server_info, brain_observations, brain_events, brain_member_patterns, brain_context_knowledge, brain_relationships, ai_performance, ai_decisions, ai_prompts, ai_metrics_history)
 - Pour télécharger: [[MEMORY_EXPORT:table:limit]] ou [[MEMORY_EXPORT:all:limit]]
 - Pour modifier: [[MEMORY_UPDATE:table:id:{"champ":"valeur"}]] (champs autorisés selon la table)
 
