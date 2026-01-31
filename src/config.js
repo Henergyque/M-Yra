@@ -59,6 +59,7 @@ export const config = {
 
   // === DISCORD CHANNELS ===
   threadChannelIds: parseArray('THREAD_CHANNEL_IDS'),
+  assistantChannelId: process.env.ASSISTANT_CHANNEL_ID,
   confessionChannelId: process.env.CONFESSION_CHANNEL_ID,
   countingChannelId: process.env.COUNTING_CHANNEL_ID,
   storyLibraryChannelId: process.env.STORY_LIBRARY_CHANNEL_ID,

@@ -2952,9 +2952,20 @@ client.on('messageCreate', async (message) => {
   await upsertServerInfo(message.guild);
 
   // Handle AI Assistant in dedicated channel or its threads
-  const isAssistantContext = config.assistantChannelId && (
-    message.channelId === config.assistantChannelId ||
-    (message.channel.isThread && message.channel.parentId === config.assistantChannelId)
+  // Check database first, fallback to env var
+  let assistantChannelId = config.assistantChannelId;
+  try {
+    const dbConfig = await getQuery('SELECT channel_id FROM channel_config WHERE feature = ? AND enabled = 1', ['assistant']);
+    if (dbConfig && dbConfig.channel_id) {
+      assistantChannelId = dbConfig.channel_id;
+    }
+  } catch (err) {
+    // Fallback to env var
+  }
+
+  const isAssistantContext = assistantChannelId && (
+    message.channelId === assistantChannelId ||
+    (message.channel.isThread && message.channel.parentId === assistantChannelId)
   );
 
   if (isAssistantContext) {
@@ -3213,6 +3224,7 @@ client.once('ready', async () => {
                 opt.setName('feature')
                   .setDescription('Fonctionnalité à configurer')
                   .addChoices(
+                    { name: 'AI Assistant', value: 'assistant' },
                     { name: 'Counting', value: 'counting' },
                     { name: 'Confession', value: 'confession' },
                     { name: 'Story Library', value: 'story_library' },
@@ -3236,6 +3248,7 @@ client.once('ready', async () => {
                 opt.setName('feature')
                   .setDescription('Fonctionnalité à supprimer')
                   .addChoices(
+                    { name: 'AI Assistant', value: 'assistant' },
                     { name: 'Counting', value: 'counting' },
                     { name: 'Confession', value: 'confession' },
                     { name: 'Story Library', value: 'story_library' },
