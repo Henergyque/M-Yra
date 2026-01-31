@@ -1292,9 +1292,16 @@ async function handleAIAssistant(message) {
           const cleanResponse = assistantResponse.replace(/\[\[COUNT:\d+\]\]/, '').trim();
           if (cleanResponse) await message.channel.send(cleanResponse);
           
-          // Update counting counter
-          await runQuery('INSERT OR REPLACE INTO counters (key, value) VALUES (?, ?)', ['count', newNumber.toString()]);
-          await message.channel.send(`🔢 Compteur réinitialisé à **${newNumber}**`);
+          // Get the counting channel ID from config
+          const countingChannelId = await getChannelForFeature('counting', 'countingChannelId', config);
+          if (!countingChannelId) {
+            await message.channel.send('❌ Channel de counting non configuré. Utilise `/config set counting #channel`');
+            return;
+          }
+          
+          // Update counting state using the proper function
+          await setCountingState(countingChannelId, newNumber, null);
+          await message.channel.send(`🔢 Compteur du salon <#${countingChannelId}> réinitialisé à **${newNumber}**`);
           return;
         }
 
