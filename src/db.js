@@ -363,6 +363,49 @@ async function initializeDatabase() {
     )
   `);
 
+  // Game state cache for performance
+  await runQuery(`
+    CREATE TABLE IF NOT EXISTS game_state_cache (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      channel_id TEXT NOT NULL,
+      game_type TEXT NOT NULL,
+      state_data TEXT NOT NULL,
+      created_at TEXT,
+      updated_at TEXT,
+      expires_at TEXT,
+      UNIQUE(channel_id, game_type)
+    )
+  `);
+
+  // Word validation cache
+  await runQuery(`
+    CREATE TABLE IF NOT EXISTS word_validation_cache (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      word1 TEXT NOT NULL,
+      word2 TEXT NOT NULL,
+      is_valid INTEGER,
+      validation_type TEXT,
+      created_at TEXT,
+      expires_at TEXT,
+      UNIQUE(word1, word2)
+    )
+  `);
+
+  // AI brain cache
+  await runQuery(`
+    CREATE TABLE IF NOT EXISTS ai_brain_cache (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      model TEXT NOT NULL,
+      cache_key TEXT NOT NULL,
+      cache_data TEXT NOT NULL,
+      created_at TEXT,
+      expires_at TEXT,
+      access_count INTEGER DEFAULT 0,
+      last_access TEXT,
+      UNIQUE(model, cache_key)
+    )
+  `);
+
   // Indexes pour performance ultra-rapide
   await runQuery(`CREATE INDEX IF NOT EXISTS idx_observations_model ON brain_observations(model, created_at DESC)`);
   await runQuery(`CREATE INDEX IF NOT EXISTS idx_patterns_model_user ON brain_member_patterns(model, user_id)`);

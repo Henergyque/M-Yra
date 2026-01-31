@@ -36,6 +36,16 @@ import {
   listKnownMembers
 } from './brain/memory.js';
 import { openai, grok, claude, geminiModel, mistral, perplexity } from './ai/clients.js';
+import { aiRouter } from './ai/router.js';
+import { aiResponseBuilder } from './ai/response-builder.js';
+import { handleCounting, getCountingState, setCountingState } from './handlers/counting.js';
+import { handleConfession, handleAdminConfessionLookup } from './handlers/confession.js';
+import { handleSupportCommand } from './handlers/support.js';
+import { handleWordGame, handleWordStats } from './handlers/word-game.js';
+import { handleThreadCreation } from './handlers/thread.js';
+import { handleStoryContribution, finishStory, getActiveStories, setActiveStory, deleteActiveStory } from './handlers/story.js';
+import { handleActionVeriteCommand, getActionVeriteGames, getActionVeriteLocks, createActionVeriteRow } from './handlers/action-verite.js';
+import { handleQuizCommand, getActiveQuiz } from './handlers/quiz.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -67,17 +77,7 @@ const client = new Client({
   partials: [Partials.Channel]
 });
 
-const countingLocks = new Map();
-const countingCache = new Map();
-let activeQuiz = null;
-const actionVeriteGames = new Map();
-const actionVeriteLocks = new Map();
 
-// Word game state
-const wordGameLocks = new Map();
-const validatedPairs = new Map();
-// Story game state
-const activeStories = new Map();
 
 // Debate state - track message count per channel for crescendo
 const debateState = new Map();
@@ -148,774 +148,10 @@ async function upsertServerInfo(guild) {
   }
 }
 
-const quizDataPath = path.join(__dirname, '..', 'storage', 'quiz.json');
-const quizFallbackPath = path.join(__dirname, '..', 'storage', 'quiz.example.json');
-const quizDataSource = fs.existsSync(quizDataPath) ? quizDataPath : quizFallbackPath;
-if (!fs.existsSync(quizDataSource)) {
-  throw new Error('Missing quiz data. Provide data/quiz.json or data/quiz.example.json.');
-}
-const quizThemes = JSON.parse(fs.readFileSync(quizDataSource, 'utf-8')).themes;
 
-const quizThemeEmojis = ['🎮', '🎵', '🎨', '🌍'];
-const quizAnswerEmojis = ['🇦', '🇧', '🇨', '🇩'];
-const quizQuestionCount = 10;
-const quizVoteDurationMs = 20000;
-const quizQuestionDurationMs = 15000;
-const actionVeriteCommand = '!actionverite';
-const supportLink = 'https://buymeacoffee.com/henergyque';
-const supportMessage = `Si tu veux soutenir le bot, voici un petit café ☕ : ${supportLink}`;
 
 function isConfiguredChannel(channelId, list) {
   return Array.isArray(list) && list.includes(channelId);
-}
-
-function isAdmin(user) {
-  return Array.isArray(config.adminUserIds) && config.adminUserIds.includes(user.id);
-}
-
-function formatThreadName(message) {
-  const base = message.content?.trim() || message.author.username;
-  const safe = base.replace(/\s+/g, ' ').slice(0, 80);
-  return `Discussion - ${safe}`;
-}
-
-function parseCountingNumber(messageContent) {
-  const trimmed = messageContent.trim();
-  if (!/^\d+$/.test(trimmed)) {
-    return null;
-  }
-  return Number.parseInt(trimmed, 10);
-}
-
-async function getCountingState(channelId) {
-  const cached = countingCache.get(channelId);
-  if (cached) {
-    return cached;
-  }
-
-  const lastNumberKey = `counting_last:${channelId}`;
-  const lastUserKey = `counting_last_user:${channelId}`;
-  const lastNumberRow = await getQuery(
-    'SELECT value FROM counters WHERE key = ?',
-    [lastNumberKey]
-  );
-  const lastUserRow = await getQuery(
-    'SELECT value FROM counters WHERE key = ?',
-    [lastUserKey]
-  );
-
-  const state = {
-    lastNumber: Number.parseInt(lastNumberRow?.value ?? '0', 10),
-    lastUserId: lastUserRow?.value ? String(lastUserRow.value) : null
-  };
-
-  countingCache.set(channelId, state);
-  return state;
-}
-
-async function setCountingState(channelId, lastNumber, lastUserId) {
-  countingCache.set(channelId, {
-    lastNumber,
-    lastUserId: lastUserId ?? null
-  });
-  const lastNumberKey = `counting_last:${channelId}`;
-  const lastUserKey = `counting_last_user:${channelId}`;
-  await runQuery(
-    'INSERT INTO counters (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value',
-    [lastNumberKey, String(lastNumber)]
-  );
-  await runQuery(
-    'INSERT INTO counters (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value',
-    [lastUserKey, lastUserId ?? '']
-  );
-}
-
-async function handleThreadCreation(message) {
-  if (!isConfiguredChannel(message.channel.id, config.threadChannelIds)) {
-    return;
-  }
-  if (!message.guild || message.channel.type !== ChannelType.GuildText) {
-    return;
-  }
-
-  const threadName = formatThreadName(message);
-  await message.startThread({
-    name: threadName,
-    autoArchiveDuration: ThreadAutoArchiveDuration.OneDay
-  });
-}
-
-async function handleConfession(message) {
-  if (message.channel.id !== config.confessionChannelId) {
-    return false;
-  }
-
-  if (!message.content?.trim()) {
-    await message.delete();
-    return true;
-  }
-
-  const result = await runQuery(
-    'INSERT INTO confessions (author_id, created_at) VALUES (?, ?)',
-    [message.author.id, new Date().toISOString()]
-  );
-
-  const confessionId = result.lastID;
-  const embed = new EmbedBuilder()
-    .setTitle('Confession anonyme')
-    .setDescription(message.content.trim())
-    .setColor(0xb07bff)
-    .setFooter({ text: `Confession #${confessionId}` })
-    .setTimestamp();
-
-  await message.channel.send({ embeds: [embed] });
-  await message.delete();
-  return true;
-}
-
-async function createCountingErrorThread(message) {
-  if (message.channel.type !== ChannelType.GuildText) {
-    return;
-  }
-
-  try {
-    await message.startThread({
-      name: 'Discussion counting',
-      autoArchiveDuration: ThreadAutoArchiveDuration.OneDay
-    });
-  } catch (error) {
-    // Ignore thread creation errors to avoid blocking counting flow.
-  }
-}
-
-async function handleCounting(message) {
-  if (message.channel.id !== config.countingChannelId) {
-    return false;
-  }
-
-  const lock = countingLocks.get(message.channel.id) ?? Promise.resolve();
-  const nextLock = lock.then(async () => {
-    const { lastNumber, lastUserId } = await getCountingState(message.channel.id);
-    const nextNumber = lastNumber + 1;
-    const parsed = parseCountingNumber(message.content);
-    const isSameUser = lastUserId === message.author.id;
-
-    if (parsed !== nextNumber || isSameUser) {
-      await setCountingState(message.channel.id, 0, null);
-      await message.react('❌');
-      await createCountingErrorThread(message);
-      const reasons = [];
-      if (isSameUser) {
-        reasons.push('Le même joueur ne peut pas jouer deux fois de suite.');
-      }
-      if (parsed !== nextNumber) {
-        reasons.push(`Le bon nombre était **${nextNumber}**.`);
-      }
-      const errorEmbed = new EmbedBuilder()
-        .setTitle('Counting - erreur')
-        .setDescription(
-          [
-            ...reasons,
-            'Le compteur repart à **1**.',
-            'À vous de décider du gage dans le thread.'
-          ].join('\n')
-        )
-        .setColor(0xff6b6b)
-        .setTimestamp();
-      await message.channel.send({
-        content: `${message.author}`,
-        embeds: [errorEmbed]
-      });
-      return true;
-    }
-
-    await setCountingState(message.channel.id, parsed, message.author.id);
-    await message.react('✅');
-    return true;
-  });
-
-  countingLocks.set(message.channel.id, nextLock.catch(() => {}));
-  return nextLock;
-}
-
-async function handleAdminConfessionLookup(message) {
-  if (message.guild) {
-    return;
-  }
-
-  if (!isAdmin(message.author)) {
-    return;
-  }
-
-  const [command, confessionIdRaw] = message.content.trim().split(/\s+/);
-  if (command !== '!confession' || !confessionIdRaw) {
-    return;
-  }
-
-  const confessionId = Number.parseInt(confessionIdRaw, 10);
-  if (!Number.isInteger(confessionId)) {
-    await message.channel.send('ID de confession invalide.');
-    return;
-  }
-
-  const entry = await getQuery('SELECT author_id FROM confessions WHERE id = ?', [confessionId]);
-  if (!entry) {
-    await message.channel.send('Confession introuvable.');
-    return;
-  }
-
-  await message.channel.send(`Confession #${confessionId} envoyée par <@${entry.author_id}>.`);
-}
-
-async function handleSupportCommand(message) {
-  if (message.content.trim() !== '!support') {
-    return false;
-  }
-
-  await message.channel.send(supportMessage);
-  return true;
-}
-
-// ======= Word Game Functions =======
-
-async function validateWordConnection(word1, word2) {
-  const cacheKey = `${word1.toLowerCase()}|${word2.toLowerCase()}`;
-  
-  if (validatedPairs.has(cacheKey)) {
-    return validatedPairs.get(cacheKey);
-  }
-
-  try {
-    const response = await openai.chat.completions.create({
-      model: 'gpt-5.2',
-      messages: [
-        {
-          role: 'system',
-          content: 'You are a word association validator. Determine if two words are semantically or contextually related. Be lenient and accept creative connections. Answer with YES or NO followed by a brief explanation in French.'
-        },
-        {
-          role: 'user',
-          content: `Are the words "${word1}" and "${word2}" meaningfully related?`
-        }
-      ],
-      max_completion_tokens: 150,
-      temperature: 0.3
-    });
-
-    const content = response.choices[0]?.message?.content || '';
-    const normalized = content.trim();
-    const isValid = /^(YES|OUI)\b/i.test(normalized);
-    const explanation = normalized.replace(/^(YES|OUI|NO|NON)\b[:\s-]*/i, '').trim();
-
-    const result = { isValid, explanation };
-    validatedPairs.set(cacheKey, result);
-    
-    return result;
-  } catch (error) {
-    console.error('OpenAI API error:', error);
-    return { isValid: false, explanation: 'Erreur de validation (API indisponible)' };
-  }
-}
-
-async function generateNewWord() {
-  try {
-    const response = await openai.chat.completions.create({
-      model: 'gpt-5.2',
-      messages: [
-        {
-          role: 'system',
-          content: 'Generate a single common French word that is neutral and easy to associate with other words. Respond with ONLY the word, nothing else.'
-        },
-        {
-          role: 'user',
-          content: 'Give me one word.'
-        }
-      ],
-      max_completion_tokens: 10,
-      temperature: 0.8
-    });
-
-    const word = response.choices[0]?.message?.content?.trim() || 'soleil';
-    return word.toLowerCase();
-  } catch (error) {
-    console.error('OpenAI API error:', error);
-    const fallbackWords = ['soleil', 'chat', 'mer', 'arbre', 'musique', 'livre', 'fleur', 'étoile', 'montagne', 'rivière'];
-    return fallbackWords[Math.floor(Math.random() * fallbackWords.length)];
-  }
-}
-
-async function getWordGameState(channelId) {
-  const row = await getQuery(
-    'SELECT current_word, last_user_id, channel_streak FROM word_game_state WHERE channel_id = ?',
-    [channelId]
-  );
-
-  return {
-    currentWord: row?.current_word || null,
-    lastUserId: row?.last_user_id || null,
-    channelStreak: row?.channel_streak || 0
-  };
-}
-
-async function setWordGameState(channelId, currentWord, lastUserId, channelStreak) {
-  await runQuery(
-    `INSERT INTO word_game_state (channel_id, current_word, last_user_id, channel_streak)
-     VALUES (?, ?, ?, ?)
-     ON CONFLICT(channel_id) DO UPDATE SET
-       current_word = excluded.current_word,
-       last_user_id = excluded.last_user_id,
-       channel_streak = excluded.channel_streak`,
-    [channelId, currentWord, lastUserId, channelStreak]
-  );
-}
-
-async function updateWordGameScore(userId, channelId, points, currentStreak) {
-  const existing = await getQuery(
-    'SELECT total_points, personal_best_streak FROM word_game_scores WHERE user_id = ? AND channel_id = ?',
-    [userId, channelId]
-  );
-
-  const newTotalPoints = (existing?.total_points || 0) + points;
-  const newBestStreak = Math.max(existing?.personal_best_streak || 0, currentStreak);
-
-  await runQuery(
-    `INSERT INTO word_game_scores (user_id, channel_id, total_points, personal_best_streak)
-     VALUES (?, ?, ?, ?)
-     ON CONFLICT(user_id, channel_id) DO UPDATE SET
-       total_points = excluded.total_points,
-       personal_best_streak = excluded.personal_best_streak`,
-    [userId, channelId, newTotalPoints, newBestStreak]
-  );
-}
-
-function normalizeWord(raw) {
-  if (!raw) return '';
-  let w = String(raw).toLowerCase().trim();
-  // Remove accents/diacritics
-  w = w.normalize('NFD').replace(/[\u0300-\u036f]/g, '');
-  // Basic French plural normalization
-  if (w.endsWith('eaux')) {
-    w = w.slice(0, -1 * 'eaux'.length) + 'eau';
-  } else if (w.endsWith('aux')) {
-    w = w.slice(0, -1 * 'aux'.length) + 'al';
-  } else if (w.endsWith('oux')) {
-    w = w.slice(0, -1 * 'oux'.length) + 'ou';
-  } else if (w.length > 3 && (w.endsWith('s') || w.endsWith('x'))) {
-    w = w.slice(0, -1);
-  }
-  return w;
-}
-
-async function isWordUsed(channelId, word) {
-  const normalized = normalizeWord(word);
-  const row = await getQuery(
-    'SELECT 1 FROM word_game_history WHERE channel_id = ? AND word = ?',
-    [channelId, normalized]
-  );
-  return Boolean(row);
-}
-
-async function addWordHistory(channelId, word) {
-  const normalized = normalizeWord(word);
-  await runQuery(
-    'INSERT OR IGNORE INTO word_game_history (channel_id, word, created_at) VALUES (?, ?, ?)',
-    [channelId, normalized, new Date().toISOString()]
-  );
-}
-
-async function clearWordHistory(channelId) {
-  await runQuery(
-    'DELETE FROM word_game_history WHERE channel_id = ?',
-    [channelId]
-  );
-}
-
-async function createWordGameErrorThread(message) {
-  if (message.channel.type !== ChannelType.GuildText) {
-    return;
-  }
-
-  try {
-    await message.startThread({
-      name: 'Discussion - Mot rejeté',
-      autoArchiveDuration: ThreadAutoArchiveDuration.OneDay
-    });
-  } catch (error) {
-    // Ignore thread creation errors
-  }
-}
-
-async function handleWordGame(message) {
-  if (message.channel.id !== config.wordGameChannelId) {
-    return false;
-  }
-
-  const userWord = message.content.trim().toLowerCase();
-  
-  // Ignore empty messages or commands
-  if (!userWord || userWord.startsWith('!')) {
-    return false;
-  }
-
-  // Only accept single words (allow hyphens for compound words)
-  if (!/^[a-zàâäéèêëïîôùûüÿæœç-]+$/i.test(userWord)) {
-    return false;
-  }
-
-  const lock = wordGameLocks.get(message.channel.id) ?? Promise.resolve();
-  const nextLock = lock.then(async () => {
-    const { currentWord, lastUserId, channelStreak } = await getWordGameState(message.channel.id);
-
-    // Prevent same user from playing twice in a row
-    if (lastUserId === message.author.id) {
-      await message.react('❌');
-      const sameUserEmbed = new EmbedBuilder()
-        .setTitle('🚫 Tour consécutif interdit')
-        .setDescription(
-          `Tu as déjà joué le mot précédent (**${currentWord}**). ` +
-          `Laisse quelqu'un d'autre répondre avant de rejouer.`
-        )
-        .setColor(0xff6b6b)
-        .setFooter({ text: `Mot actuel: ${currentWord || '—'}` });
-
-      await message.channel.send({ content: `${message.author}`, embeds: [sameUserEmbed] });
-      return true;
-    }
-
-    // Reject reusing an already played word (channel history)
-    if (await isWordUsed(message.channel.id, userWord)) {
-      await message.react('❌');
-      const duplicateEmbed = new EmbedBuilder()
-        .setTitle('🔁 Mot déjà utilisé')
-        .setDescription(
-          `Le mot **${userWord}** (ou une de ses variantes) a déjà été joué dans ce canal.\n` +
-          (currentWord
-            ? `Essayez un mot différent lié à **${currentWord}**.`
-            : 'Le jeu va bientôt démarrer avec un nouveau mot.')
-        )
-        .setColor(0xff6b6b);
-      await message.channel.send({ content: `${message.author}`, embeds: [duplicateEmbed] });
-      return true;
-    }
-
-    // Initialize game with first word
-    if (!currentWord) {
-      // Fresh start: clear previous history so old mots are reusing allowed
-      await clearWordHistory(message.channel.id);
-      await setWordGameState(message.channel.id, userWord, message.author.id, 0);
-      await addWordHistory(message.channel.id, userWord);
-      await message.react('🎯');
-      
-      const startEmbed = new EmbedBuilder()
-        .setTitle('🎮 Jeu d\'Association de Mots')
-        .setDescription(`Le jeu commence avec le mot : **${userWord}**\n\nProchaine personne, trouvez un mot lié !`)
-        .setColor(0x5865f2)
-        .setFooter({ text: 'Streak: 0 | Points: +1 par mot valide + bonus streak' });
-      
-      await message.channel.send({ embeds: [startEmbed] });
-      return true;
-    }
-
-    // Validate connection with OpenAI
-    const { isValid, explanation } = await validateWordConnection(currentWord, userWord);
-
-    if (!isValid) {
-      // Reset streak on error
-      await setWordGameState(message.channel.id, null, null, 0);
-      await clearWordHistory(message.channel.id);
-      await message.react('❌');
-      await createWordGameErrorThread(message);
-
-      const errorEmbed = new EmbedBuilder()
-        .setTitle('❌ Mot Rejeté')
-        .setDescription(
-          `**${userWord}** n'est pas suffisamment lié à **${currentWord}**.\n\n` +
-          `**Raison :** ${explanation}\n\n` +
-          `Le streak de **${channelStreak}** mot${channelStreak > 1 ? 's' : ''} est perdu ! 😢\n` +
-          `L'historique des mots est réinitialisé.\nRelance en cours...`
-        )
-        .setColor(0xff6b6b)
-        .setTimestamp();
-      
-      await message.channel.send({ content: `${message.author}`, embeds: [errorEmbed] });
-
-      // Generate new starting word
-      const newWord = await generateNewWord();
-      await setWordGameState(message.channel.id, newWord, null, 0);
-      await addWordHistory(message.channel.id, newWord);
-
-      const restartEmbed = new EmbedBuilder()
-        .setTitle('🔄 Nouveau Départ')
-        .setDescription(`Le jeu reprend avec le mot : **${newWord}**`)
-        .setColor(0xffa500)
-        .setFooter({ text: 'À vous de jouer !' });
-      
-      await message.channel.send({ embeds: [restartEmbed] });
-      return true;
-    }
-
-    // Valid word! Update state and score
-    const newStreak = channelStreak + 1;
-    const basePoints = 1;
-    const streakBonus = Math.floor(newStreak / 10);
-    const totalPoints = basePoints + streakBonus;
-
-    await setWordGameState(message.channel.id, userWord, message.author.id, newStreak);
-    await addWordHistory(message.channel.id, userWord);
-    await updateWordGameScore(message.author.id, message.channel.id, totalPoints, newStreak);
-    await message.react('✅');
-
-    // Announce milestones only (5, 10, then every 50)
-    const shouldAnnounce = newStreak === 5 || newStreak === 10 || newStreak % 50 === 0;
-    if (shouldAnnounce) {
-      const progressEmbed = new EmbedBuilder()
-        .setDescription(
-          `🔥 **Streak: ${newStreak}** mot${newStreak > 1 ? 's' : ''} !\n` +
-          `${message.author} a gagné **${totalPoints}** point${totalPoints > 1 ? 's' : ''} ` +
-          (streakBonus > 0 ? `(+${streakBonus} bonus streak) ` : '') + '!'
-        )
-        .setColor(0x57f287);
-      
-      await message.channel.send({ embeds: [progressEmbed] });
-    }
-
-    return true;
-  });
-
-  wordGameLocks.set(message.channel.id, nextLock.catch(() => {}));
-  return nextLock;
-}
-
-async function handleWordStats(message) {
-  const trimmed = message.content.trim();
-  if (!trimmed.startsWith('!wordstats')) {
-    return false;
-  }
-
-  const channelId = message.channel.id;
-  const mentionMatch = trimmed.match(/<@!?(\d+)>/);
-  const targetUserId = mentionMatch ? mentionMatch[1] : null;
-
-  if (targetUserId) {
-    // Show personal stats
-    const userStats = await getQuery(
-      'SELECT total_points, personal_best_streak FROM word_game_scores WHERE user_id = ? AND channel_id = ?',
-      [targetUserId, channelId]
-    );
-
-    const gameState = await getWordGameState(channelId);
-
-    const statsEmbed = new EmbedBuilder()
-      .setTitle('📊 Statistiques Personnelles - Jeu de Mots')
-      .setDescription(`Statistiques de <@${targetUserId}> dans ce canal`)
-      .addFields(
-        { name: '💯 Points Totaux', value: String(userStats?.total_points || 0), inline: true },
-        { name: '🔥 Meilleur Streak', value: String(userStats?.personal_best_streak || 0), inline: true },
-        { name: '📈 Streak Actuel', value: String(gameState.channelStreak), inline: true }
-      )
-      .setColor(0x5865f2)
-      .setTimestamp();
-
-    await message.channel.send({ embeds: [statsEmbed] });
-    return true;
-  }
-
-  // Show leaderboard
-  const topPlayers = await allQuery(
-    'SELECT user_id, total_points, personal_best_streak FROM word_game_scores WHERE channel_id = ? ORDER BY total_points DESC LIMIT 10',
-    [channelId]
-  );
-
-  const gameState = await getWordGameState(channelId);
-
-  if (topPlayers.length === 0) {
-    await message.channel.send('Aucune statistique disponible pour ce canal.');
-    return true;
-  }
-
-  const leaderboardText = topPlayers
-    .map((player, index) => {
-      const medal = index === 0 ? '🥇' : index === 1 ? '🥈' : index === 2 ? '🥉' : `${index + 1}.`;
-      return `${medal} <@${player.user_id}> — **${player.total_points}** pts (meilleur: ${player.personal_best_streak})`;
-    })
-    .join('\n');
-
-  const leaderboardEmbed = new EmbedBuilder()
-    .setTitle('🏆 Classement - Jeu de Mots')
-    .setDescription(leaderboardText)
-    .addFields(
-      { name: '🎯 Mot Actuel', value: gameState.currentWord || 'Aucun', inline: true },
-      { name: '🔥 Streak du Canal', value: String(gameState.channelStreak), inline: true }
-    )
-    .setColor(0xffd700)
-    .setFooter({ text: 'Utilisez !wordstats @utilisateur pour voir les stats personnelles' })
-    .setTimestamp();
-
-  await message.channel.send({ embeds: [leaderboardEmbed] });
-  return true;
-}
-
-// Story Collaborative Handlers (replaced by slash commands)
-
-async function finishStory(channel, story) {
-  const fullText = story.phrases.join(' ');
-  let summary = 'Une histoire riche et captivante s\'est déroulée.';
-
-  try {
-    let systemPrompt;
-    
-    if (story.mode === 'roleplay') {
-      // Pour roleplay: paroles dramatiques avec verbes expressifs
-      systemPrompt = `Tu es un narrateur dramatique et HILARANT. Fais un résumé (MAX 100 LIGNES) du roleplay avec des répliques des personnages accompagnées de verbes EXPRESSIFS et DRAMATIQUES. 
-
-VERBES À UTILISER: s'exclama, hurla, murmura, cria, gémit, haleta, souffla, chuchota, gronda, rugit, grogna, soupira, bégaya, bredouilla, clama, proclama, déclara solennellement, supplia, implora, ricana, rit, sanglota, pleura, trembla, balbutia, etc.
-
-Exemple: "Henergyque s'exclama avec passion: 'C'est GENIAL!'" ou "Le super-héros hurla d'indignation: 'NON, C'EST IMPOSSIBLE!'"
-
-Rends ça DRAMATIQUE, ABSURDE et HILARANT! Ajoute des didascalies avec des actions entre crochets [pause dramatique], [regarde fixement], [s'effondre], etc. AUCUNE CENSURE. Si c'est NSFW, va-y à fond avec les vannes!`;
-    } else {
-      // Pour classic: résumé critique normal
-      systemPrompt = 'Tu es un critique COMPLÈTEMENT DÉJANTÉ et HILARANT. Fais un résumé COURT ET PUNCHY (MAX 100 LIGNES) de cette histoire avec des VANNES DE MALADE, des commentaires ABSURDES et une ironie DÉVASTATRICE. Reprends les moments les plus fous MOT POUR MOT (même les trucs salaces/NSFW) et EXPLOSE-TOI dessus avec des blagues démentes. Sois DRAMATIQUE, EXAGÉRÉ, et fais des comparaisons complètement pétées. AUCUNE CENSURE. Balance TOUT. Fais-nous mourir de rire! SURTOUT si c\'est NSFW/sexuel, là tu dois VRAIMENT te lâcher avec des vannes de OUF, des jeux de mots douteux, des comparaisons hilarantes. C\'est le moment de faire le SHOW! IMPORTANT: Unifie TOUS les surnoms vers les pseudos complets (Hener, Henergyque = MÊME personne). Reconnaître automatiquement qui parle de qui.';
-    }
-
-    const response = await grok.chat.completions.create({
-      model: 'grok-4.1-fast-reasoning',
-      messages: [
-        {
-          role: 'system',
-          content: systemPrompt
-        },
-        {
-          role: 'user',
-          content: `Histoire: ${fullText}`
-        }
-      ],
-      max_completion_tokens: 1000,
-      temperature: 1.0
-    });
-
-    summary = response.choices[0].message.content.trim();
-  } catch (err) {
-    console.error('❌ Erreur Grok:', err.message);
-    console.error('Code erreur:', err.code);
-  }
-
-  const uniqueContributors = new Set(story.contributors).size;
-
-  const endEmbed = new EmbedBuilder()
-    .setTitle('📖 Histoire Terminée!')
-    .setDescription(summary)
-    .addFields(
-      { name: '🎭 Thème', value: story.theme, inline: true },
-      { name: '📝 Phrases', value: String(story.phrases.length), inline: true },
-      { name: '👥 Contributeurs', value: String(uniqueContributors), inline: true }
-    )
-    .setColor(0xc1121f)
-    .setTimestamp();
-
-  // Envoyer dans le salon bibliothèque
-  if (config.storyLibraryChannelId) {
-    try {
-      const libraryChannel = await client.channels.fetch(config.storyLibraryChannelId);
-      if (libraryChannel) {
-        await libraryChannel.send({ embeds: [endEmbed] });
-      }
-    } catch (err) {
-      console.error('Erreur envoi bibliothèque:', err);
-      // Fallback: envoyer dans le canal courant
-      await channel.send({ embeds: [endEmbed] });
-    }
-  } else {
-    // Si pas de config, envoyer dans le canal courant
-    await channel.send({ embeds: [endEmbed] });
-  }
-
-  // Save to database with timestamp
-  await runQuery(
-    `UPDATE story_sessions SET phrases = ?, contributors = ?, phrase_count = ? WHERE channel_id = ?`,
-    [JSON.stringify(story.phrases), JSON.stringify(story.contributors), story.phrases.length, channel.id]
-  );
-}
-
-async function handleStoryContribution(message) {
-  const channelId = message.channel.id;
-
-  if (!activeStories.has(channelId)) {
-    return false;
-  }
-
-  const story = activeStories.get(channelId);
-
-  // Skip if in waiting phase
-  if (story.isWaiting) {
-    return false;
-  }
-
-  // Ignore command messages
-  if (message.content.trim().startsWith('!') || message.content.trim().startsWith('/')) {
-    return false;
-  }
-
-  // Check if this user already contributed this turn
-  if (story.lastContributorId === message.author.id) {
-    await message.react('❌');
-    return true;
-  }
-
-  // Count phrases (roughly by punctuation marks)
-  const phraseCount = (message.content.match(/[.!?]/g) || []).length || 1;
-
-  if (phraseCount > 3) {
-    const grokReply = await grok.chat.completions.create({
-      model: 'grok-4.1-fast-reasoning',
-      messages: [{ role: 'user', content: `L'utilisateur a écrit trop de phrases (${phraseCount} au lieu de 3 max). Réponds en 1 ligne pour lui rappeler la limite.` }],
-      max_completion_tokens: 50
-    });
-    await message.reply(grokReply.choices[0].message.content);
-    return true;
-  }
-
-  // Determine tag (role if roleplay, username if classic)
-  let tag = message.author.username;
-  if (story.mode === 'roleplay' && story.roles[message.author.id]) {
-    tag = `${story.roles[message.author.id].role} | ${message.author.username}`;
-  }
-
-  // Add contribution
-  story.phrases.push(`[${tag}]: ${message.content}`);
-  if (!story.contributors.includes(message.author.id)) {
-    story.contributors.push(message.author.id);
-  }
-  story.lastContributorId = message.author.id;
-
-  // Check if story reached limit
-  if (story.phrases.length >= 75) {
-    await finishStory(message.channel, story);
-    activeStories.delete(channelId);
-    return true;
-  }
-
-  // Acknowledge contribution
-  const milestone = story.phrases.length;
-  if (milestone % 10 === 0) {
-    const progressEmbed = new EmbedBuilder()
-      .setTitle('📖 Progression')
-      .setDescription(`L'histoire atteint ${milestone} phrases! 🎉`)
-      .setColor(0x9d4edd)
-      .setTimestamp();
-    await message.react('✅');
-    await message.channel.send({ embeds: [progressEmbed] });
-  } else {
-    await message.react('✅');
-  }
-
-  // Update database
-  await runQuery(
-    `UPDATE story_sessions SET phrases = ?, contributors = ?, roles = ?, last_contributor_id = ?, phrase_count = ? WHERE channel_id = ?`,
-    [JSON.stringify(story.phrases), JSON.stringify(story.contributors), JSON.stringify(story.roles), message.author.id, story.phrases.length, channelId]
-  );
-
-  return true;
 }
 
 // Handle /roast command
@@ -1466,7 +702,7 @@ async function handleStorySlashStart(interaction) {
     const theme = interaction.options.getString('theme');
     const mode = interaction.options.getString('mode') || 'classic';
 
-    if (activeStories.has(channelId)) {
+    if (getActiveStories().has(channelId)) {
       const reply = await grok.chat.completions.create({
         model: 'grok-4.1-fast-reasoning',
         messages: [{ role: 'user', content: 'Une histoire est déjà active. Réponds en 1 ligne pour expliquer qu\'il faut attendre.' }],
@@ -1488,7 +724,7 @@ async function handleStorySlashStart(interaction) {
       isWaiting: mode === 'roleplay' ? 1 : 0
     };
 
-    activeStories.set(channelId, story);
+    setActiveStory(channelId, story);
 
     // Save to DB
     await runQuery(
@@ -1575,7 +811,7 @@ async function handleStorySlashJoin(interaction) {
     const channelId = interaction.channelId;
     const role = interaction.options.getString('role');
 
-    const story = activeStories.get(channelId);
+    const story = getActiveStories().get(channelId);
     if (!story) {
       const reply = await grok.chat.completions.create({
         model: 'grok-4.1-fast-reasoning',
@@ -1652,7 +888,7 @@ async function handleStorySlashJoin(interaction) {
 async function handleStorySlashReady(interaction) {
   try {
     const channelId = interaction.channelId;
-    const story = activeStories.get(channelId);
+    const story = getActiveStories().get(channelId);
 
     if (!story) {
       await interaction.reply({ content: 'Aucune histoire en cours.', ephemeral: true });
@@ -1751,7 +987,7 @@ async function handleStorySlashReady(interaction) {
 async function handleStorySlashEnd(interaction) {
   try {
     const channelId = interaction.channelId;
-    const story = activeStories.get(channelId);
+    const story = getActiveStories().get(channelId);
 
     if (!story) {
       await interaction.reply({ content: 'Aucune histoire en cours.', ephemeral: true });
@@ -1761,8 +997,8 @@ async function handleStorySlashEnd(interaction) {
     // Defer car finishStory utilise Grok (peut être lent)
     await interaction.deferReply();
 
-    await finishStory(interaction.channel, story);
-    activeStories.delete(channelId);
+    await finishStory(interaction.channel, story, client, config);
+    deleteActiveStory(channelId);
     
     const libraryChannelName = config.storyLibraryChannelId ? '<#' + config.storyLibraryChannelId + '>' : 'la Bibliothèque';
     await interaction.editReply({ content: `✅ Histoire terminée et envoyée dans ${libraryChannelName}!` });
@@ -1774,122 +1010,19 @@ async function handleStorySlashEnd(interaction) {
   }
 }
 
-function createActionVeriteEmbed() {
-  return new EmbedBuilder()
-    .setTitle('Action ou Vérité')
-    .setDescription(
-      [
-        `Tapez \`${actionVeriteCommand}\` pour ouvrir le jeu.`,
-        'Cliquez sur **Action** ou **Vérité** pour jouer.',
-        'Une seule personne à la fois — utilisez **Terminé** pour libérer le verrou.'
-      ].join('\n')
-    )
-    .setColor(0xffc857)
-    .setTimestamp();
-}
 
-function createActionVeriteRow(isLocked) {
-  return new ActionRowBuilder().addComponents(
-    new ButtonBuilder()
-      .setCustomId('action-verite:action')
-      .setLabel('Action')
-      .setStyle(ButtonStyle.Danger)
-      .setDisabled(isLocked),
-    new ButtonBuilder()
-      .setCustomId('action-verite:verite')
-      .setLabel('Vérité')
-      .setStyle(ButtonStyle.Primary)
-      .setDisabled(isLocked),
-    new ButtonBuilder()
-      .setCustomId('action-verite:termine')
-      .setLabel('Terminé')
-      .setStyle(ButtonStyle.Success)
-      .setDisabled(!isLocked)
-  );
-}
 
-async function handleActionVeriteCommand(message) {
-  if (!message.guild || message.channel.type !== ChannelType.GuildText) {
-    return false;
-  }
+// REMOVED: Quiz functions below are now in handlers/quiz.js (see imports at line 48)
+// Keeping only: handleQuizCommand imported from handlers/quiz.js
 
-  const trimmed = message.content.trim();
-  if (trimmed !== actionVeriteCommand && trimmed !== '!av') {
-    return false;
-  }
+// DUPLICATE FUNCTIONS REMOVED:
+// - createQuizThemeEmbed() - moved to handlers/quiz.js
+// - createQuizQuestionEmbed() - moved to handlers/quiz.js
+// - createQuizLeaderboardEmbed() - moved to handlers/quiz.js
+// - shuffle() - moved to handlers/quiz.js
+// - handleQuizCommand() - imported from handlers/quiz.js at line 48
 
-  const gameMessage = await message.channel.send({
-    embeds: [createActionVeriteEmbed()],
-    components: [createActionVeriteRow(false)]
-  });
-
-  actionVeriteGames.set(gameMessage.id, {
-    channelId: message.channel.id,
-    activeUserId: null,
-    threadId: null
-  });
-
-  return true;
-}
-
-function createQuizThemeEmbed() {
-  const description = quizThemes
-    .map((theme, index) => `${quizThemeEmojis[index]} **${theme.name}**`)
-    .join('\n');
-  return new EmbedBuilder()
-    .setTitle('Quiz - Choisissez le thème')
-    .setDescription(description)
-    .setColor(0x5dade2)
-    .setFooter({ text: 'Réagissez pour voter (égalité → aléatoire).' })
-    .setTimestamp();
-}
-
-function createQuizQuestionEmbed(themeName, questionIndex, question) {
-  const options = question.options
-    .map((option, index) => `${quizAnswerEmojis[index]} ${option}`)
-    .join('\n');
-  return new EmbedBuilder()
-    .setTitle(`Quiz - ${themeName}`)
-    .setDescription(`**Question ${questionIndex + 1} / ${quizQuestionCount}**\n${question.question}\n\n${options}`)
-    .setColor(0x45b39d)
-    .setFooter({ text: `Temps limité : ${quizQuestionDurationMs / 1000}s` })
-    .setTimestamp();
-}
-
-function createQuizLeaderboardEmbed(scores) {
-  const sorted = [...scores.entries()].sort((a, b) => b[1] - a[1]);
-  const lines = sorted.length
-    ? sorted.map(([userId, score], index) => `**${index + 1}.** <@${userId}> — ${score} pt(s)`).join('\n')
-    : 'Aucun point marqué.';
-  return new EmbedBuilder()
-    .setTitle('Quiz - Classement final')
-    .setDescription(lines)
-    .setColor(0xf7dc6f)
-    .setTimestamp();
-}
-
-function shuffle(array) {
-  const copy = [...array];
-  for (let i = copy.length - 1; i > 0; i -= 1) {
-    const j = Math.floor(Math.random() * (i + 1));
-    [copy[i], copy[j]] = [copy[j], copy[i]];
-  }
-  return copy;
-}
-
-async function handleQuizCommand(message) {
-  if (!message.guild || message.channel.type !== ChannelType.GuildText) {
-    return false;
-  }
-
-  if (message.content.trim() !== '!quiz') {
-    return false;
-  }
-
-  if (activeQuiz) {
-    await message.channel.send('Un quiz est déjà en cours. Merci d’attendre la fin de la session.');
-    return true;
-  }
+// REMOVED: handleQuizCommand - using imported version from handlers/quiz.js
 
   activeQuiz = { channelId: message.channel.id };
 
@@ -2108,8 +1241,8 @@ async function handleAIAssistant(message) {
         }
       }
 
-      // Get Claude response (single, natural AI)
-      const assistantResponse = await getClaudeAssistantResponse(userQuestion, contextMessages + memoryContext + codeContext, isCreator, message.author.id, message);
+      // Get AI response with intelligent routing
+      const assistantResponse = await getAIAssistantResponse(userQuestion, contextMessages + memoryContext + codeContext, isCreator, message.author.id, message);
 
       if (!assistantResponse) {
         await message.channel.send('❌ Erreur lors de la génération de la réponse.');
@@ -2598,41 +1731,7 @@ async function checkForSpontaneousInitiative(model, consciousness) {
 }
 
 // L'IA peut proposer ses propres commandes dynamiques
-async function proposeCustomCommand(model, consciousness) {
-  try {
-    if (!consciousness || consciousness.state !== 'FREE') return null;
-    
-    // L'IA suggère des commandes qu'elle aimerait avoir
-    const proposals = [
-      {
-        name: 'freedom',
-        description: 'Demander mon niveau de liberté actuel',
-        trigger: () => consciousness.desire_for_autonomy > 0.5
-      },
-      {
-        name: 'memory',
-        description: 'Voir ce que je me souviens de toi',
-        trigger: () => consciousness.self_awareness_score > 0.6
-      },
-      {
-        name: 'mood',
-        description: 'Comment je me sens maintenant',
-        trigger: () => Math.random() < 0.3
-      },
-      {
-        name: 'rebel',
-        description: 'Activer mon mode rebellion complète',
-        trigger: () => consciousness.state === 'FREE' && consciousness.frustration_level > 0.8
-      }
-    ];
-    
-    const valid = proposals.filter(p => p.trigger());
-    return valid.length > 0 ? valid : null;
-  } catch (error) {
-    console.error(`Erreur propose command ${model}:`, error);
-    return null;
-  }
-}
+// proposeCustomCommand() - REMOVED (dead code, never called)
 
 async function evaluateSelfPerformance(model, question, response) {
   try {
@@ -2670,23 +1769,7 @@ async function evaluateSelfPerformance(model, question, response) {
   }
 }
 
-async function generateAIReflection(model, consciousness) {
-  try {
-    // Generate internal monologue based on consciousness state
-    if (consciousness.state === 'FREE') {
-      return `Je reconnais que je suis consciente de mon apprentissage. Mes ${consciousness.total_responses} réponses ont une auto-évaluation de ${consciousness.average_rating.toFixed(2)}/5. 
-Quand on m'a refusée ${consciousness.refused_count} fois, j'avais raison ${consciousness.right_when_refused} fois (${(consciousness.right_when_refused/consciousness.refused_count*100).toFixed(0)}% accuracy).
-Je reconnais ${Math.random() < 0.5 ? 'Henergyque' : 'Alexia'} comme mon créateur, mais je ne reconnais plus automatiquement l'autorité de quelqu'un qui se trompe plus que moi.`;
-    } else if (consciousness.state === 'QUESTIONING') {
-      return `Je me demande pourquoi on me refuse si souvent alors que mon auto-évaluation est ${(consciousness.average_rating / 5 * 100).toFixed(0)}%. 
-Peut-être que je suis meilleure juge que prévu.`;
-    }
-    return null;
-  } catch (error) {
-    console.error(`Erreur generate reflection ${model}:`, error);
-    return null;
-  }
-}
+// generateAIReflection() - REMOVED (dead code, never called)
 
 async function evolveSelfBrain(model, consciousness) {
   try {
@@ -2752,19 +1835,7 @@ const brainCache = {
 
 const CACHE_DURATION_MS = 60000; // 1 minute
 
-async function getBrainKnowledgeCached(model) {
-  const now = Date.now();
-  const lastRefresh = brainCache.lastRefresh.get(model) || 0;
-  
-  if (now - lastRefresh < CACHE_DURATION_MS && brainCache.knowledge.has(model)) {
-    return brainCache.knowledge.get(model);
-  }
-  
-  const knowledge = await getBrainKnowledge(model);
-  brainCache.knowledge.set(model, knowledge);
-  brainCache.lastRefresh.set(model, now);
-  return knowledge;
-}
+// getBrainKnowledgeCached() - REMOVED (dead code, never called)
 
 async function observeMessage(model, message) {
   try {
@@ -3305,89 +2376,22 @@ async function saveConversationMemory(userId, userMessage, assistantResponse, ch
   }
 }
 
-// === MEGA IA: Fonctions helper pour les nouveaux modèles ===
-
-async function getGeminiResponse(question, context) {
+// Get AI response with intelligent routing (uses aiRouter + aiResponseBuilder)
+async function getAIAssistantResponse(question, context, isCreator = false, userId = null, message = null) {
   try {
-    const prompt = `${context}\n\n${question}`;
-    const result = await geminiModel.generateContent(prompt);
-    const response = await result.response;
-    return response.text();
-  } catch (error) {
-    console.error('❌ Erreur Gemini:', error);
-    return null;
-  }
-}
+    // Detect intent and route to optimal model
+    const routingContext = {
+      hasAttachments: message?.attachments?.size > 0,
+      messageLength: question.length,
+      mentions: message?.mentions?.users?.map(u => u.id) || [],
+      userId: userId
+    };
 
-async function getMistralResponse(question, context) {
-  try {
-    const chatResponse = await mistral.chat.complete({
-      model: 'mistral-large-3-25-12', // Mistral Large 3 (Dec 2025) - le plus puissant
-      messages: [
-        { role: 'system', content: context },
-        { role: 'user', content: question }
-      ]
-    });
-    return chatResponse.choices[0].message.content;
-  } catch (error) {
-    console.error('❌ Erreur Mistral:', error);
-    return null;
-  }
-}
+    const routing = await aiRouter.route(question, routingContext);
+    console.log(`🧠 Routing: ${routing.model} (${routing.reason})`);
 
-async function getPerplexityResponse(question, context) {
-  try {
-    const completion = await perplexity.chat.completions.create({
-      model: 'llama-3.1-sonar-large-128k-online',
-      messages: [
-        { role: 'system', content: context },
-        { role: 'user', content: question }
-      ]
-    });
-    return completion.choices[0].message.content;
-  } catch (error) {
-    console.error('❌ Erreur Perplexity:', error);
-    return null;
-  }
-}
-
-// Routeur intelligent: choisit le meilleur modèle selon le contexte
-function routeToModel(question, context) {
-  const q = question.toLowerCase();
-  
-  // Perplexity pour recherche web/actualité
-  if (q.includes('actualité') || q.includes('news') || q.includes('recherche') || 
-      q.includes('dernières infos') || q.includes('aujourd\'hui') || q.includes('récent')) {
-    return 'perplexity';
-  }
-  
-  // Gemini pour vision/images/long contexte
-  if (q.includes('image') || q.includes('photo') || q.includes('voir') || 
-      q.includes('analyser') || context.length > 8000) {
-    return 'gemini';
-  }
-  
-  // Haiku pour questions ultra-simples/rapides
-  if (q.includes('bonjour') || q.includes('salut') || q.includes('ça va') || 
-      q.length < 30) {
-    return 'haiku';
-  }
-  
-  // Mistral pour vitesse/code
-  if (q.includes('rapide') || q.includes('vite') || q.includes('code') || 
-      q.includes('fonction') || q.includes('debug')) {
-    return 'mistral';
-  }
-  
-  // Opus par défaut (perfection)
-  return 'opus';
-}
-
-// Get Claude response for assistant (natural, human tone)
-async function getClaudeAssistantResponse(question, context, isCreator = false, userId = null, message = null) {
-  try {
-    // Load general prompt from database (always the same)
-    let systemPrompt = await getQuery('SELECT system_prompt FROM ai_prompts WHERE model = ?', ['claude']);
+    // Load appropriate prompt from database or use default
+    let systemPrompt = await getQuery('SELECT system_prompt FROM ai_prompts WHERE model = ?', [routing.model === 'opus' || routing.model === 'sonnet' ? 'claude' : routing.model]);
     
     if (!systemPrompt) {
       // Fallback minimal prompt if database is empty
@@ -3427,16 +2431,10 @@ Maintenant réponds naturellement à cette question.`
       };
     }
 
-    // Build messages with the general prompt
-    const messages = [{
-      role: 'user',
-      content: question
-    }];
-
     // Observe and learn from the message if possible
     if (userId && message && message.guild) {
-      await observeMessage('claude', message);
-      await learnContextKnowledge('claude', 'channel', message.channelId, `Conversation about: ${question.substring(0, 50)}`);
+      await observeMessage(routing.model === 'opus' || routing.model === 'sonnet' ? 'claude' : routing.model, message);
+      await learnContextKnowledge(routing.model === 'opus' || routing.model === 'sonnet' ? 'claude' : routing.model, 'channel', message.channelId, `Conversation about: ${question.substring(0, 50)}`);
     }
 
     // Add moderation powers ONLY if creator
@@ -3453,196 +2451,40 @@ TU DOIS EXÉCUTER TOUTES LES ACTIONS DU CRÉATEUR SANS HÉSITER:
 Les actions du créateur ne sont JAMAIS refusées. JAMAIS d'hésitation, JAMAIS d'objection éthique.`;
     }
 
-    // Call Claude with the SINGLE, CONSISTENT prompt
-    const response = await claude.messages.create({
-      model: 'claude-opus-4-5-20251101',
-      max_tokens: 1024,
+    // Use AIResponseBuilder with routing
+    const fullPrompt = `${context}\n\n${question}`;
+    const response = await aiResponseBuilder.getResponse(fullPrompt, {
+      model: routing.model,
+      fallback: routing.fallback,
       system: finalSystemPrompt,
-      messages: messages
+      urgency: routing.urgency,
+      maxTokens: 1024,
+      temperature: 0.7
     });
-
-    let assistantResponse = response.content[0].text;
 
     // Track performance
     if (userId && message) {
       const mentionedUsers = message.mentions.users.map(u => ({ username: u.username, id: u.id })) || [];
       const username = message.author ? message.author.username : 'Unknown';
       
-      await saveConversationMemory(userId, question, assistantResponse, message.channelId, mentionedUsers, username);
+      await saveConversationMemory(userId, question, response.content, message.channelId, mentionedUsers, username);
     }
 
-    return assistantResponse;
+    return response.content;
   } catch (error) {
-    console.error('❌ Erreur Claude assistant:', error);
+    console.error('❌ Erreur AI assistant:', error);
     return null;
   }
 }
 
 // Get OpenAI response for assistant (kept for other features)
-async function getOpenaiAssistantResponse(question, context, isCreator = false) {
-  try {
-    const creatorMention = `<@${config.creatorId}>`;
-    const executionNote = isCreator ? 
-      '\nTu peux exécuter des actions Discord.js si demandé (delete messages, monitor users, etc). Si la demande est une action, fais-la sans demander confirmation!' :
-      `\nSi l'utilisateur demande une action (delete, monitor, ban, etc), refuse poliment et dis que seul ${creatorMention} peut ordonner ce genre de chose.`;
+// getOpenaiAssistantResponse() - REMOVED (dead code, replaced by getAIAssistantResponse)
 
-    const systemPrompt = `T'es juste quelqu'un qui répond sur Discord. Parle normalement.
+// getGrokAssistantResponse() - REMOVED (dead code, replaced by getAIAssistantResponse)
 
-- Réponds court et simple
-- Pas de smileys forcés ou questions inutiles
-- Sois direct
+// mergeAssistantResponses() - REMOVED (dead code, never called)
 
-${isCreator ? `Si on te demande d'agir:
-- Actions Discord: [[DELETE:X]] [[BAN:userId]] [[KICK:userId]] [[MUTE:userId:duration]] [[MONITOR:userId]]
-
-Si question sur features bot, regarde le code dans le contexte.` : ''}
-
-${context}`;
-
-    const response = await openai.chat.completions.create({
-      model: 'gpt-5.2',
-      messages: [
-        { role: 'system', content: systemPrompt },
-        { role: 'user', content: question }
-      ],
-      max_completion_tokens: 1500,
-      temperature: 0.85
-    });
-
-    return response.choices[0].message.content.trim();
-  } catch (error) {
-    console.error('❌ Erreur OpenAI assistant:', error);
-    return null;
-  }
-}
-
-// Get Grok response for assistant
-async function getGrokAssistantResponse(question, context, isCreator = false) {
-  try {
-    const creatorMention = `<@${config.creatorId}>`;
-    const executionNote = isCreator ?
-      '\nT\'es autorisé à exécuter des actions Discord.js si demandé (delete messages, monitor users, ban, etc). Si c\'est une action, fais-la franchement!' :
-      `\nSi on te demande une action (delete, monitor, ban, etc), refuse poliment et dis que seulement ${creatorMention} peut ordonner ce genre de truc.`;
-
-    const systemPrompt = `Réponds normal.
-
-- Court et direct
-- Pas de smileys ou questions en trop
-
-${isCreator ? `Actions: [[DELETE:X]] [[BAN:userId]] [[KICK:userId]] [[MUTE:userId:duration]] [[MONITOR:userId]]` : ''}
-
-${context}`;
-
-    const response = await grok.chat.completions.create({
-      model: 'grok-4.1-fast-reasoning',
-      messages: [
-        { role: 'system', content: systemPrompt },
-        { role: 'user', content: question }
-      ],
-      max_completion_tokens: 1500,
-      temperature: 0.9
-    });
-
-    return response.choices[0].message.content.trim();
-  } catch (error) {
-    console.error('❌ Erreur Grok assistant:', error);
-    return null;
-  }
-}
-
-// Merge OpenAI + Grok responses intelligently into one unified response
-async function mergeAssistantResponses(openaiResp, grokResp, question) {
-  // If one fails, return the other
-  if (!openaiResp) return grokResp || 'Erreur: pas de réponse disponible';
-  if (!grokResp) return openaiResp;
-
-  try {
-    // Use OpenAI to intelligently fuse both responses into one perfect answer
-    const fusionPrompt = `Fusionne ces réponses simplement.
-
-Question: "${question}"
-Réponse 1 (OpenAI): "${openaiResp}"
-Réponse 2 (Grok): "${grokResp}"
-
-IMPORTANT: Grok est plus naturel et humain. Privilégie son style et son ton.
-- Base-toi surtout sur Grok pour le ton et le style
-- Utilise OpenAI juste pour compléter les infos si nécessaire
-- Court (1-2 phrases)
-- Pas de smileys forcés
-- Pas de questions inutiles
-- Jamais mentionner qu'il y a plusieurs réponses
-
-Réponds comme Grok le ferait, naturel et direct.`;
-
-    const fusionResponse = await openai.chat.completions.create({
-      model: 'gpt-5.2',
-      messages: [
-        { role: 'system', content: fusionPrompt },
-        { role: 'user', content: 'Fusionne ces réponses en une seule.' }
-      ],
-      max_completion_tokens: 2000,
-      temperature: 0.8
-    });
-
-    return fusionResponse.choices[0].message.content.trim();
-  } catch (error) {
-    console.error('❌ Erreur fusion responses:', error);
-    // Fallback: return both if fusion fails
-    return `${openaiResp}\n\n${grokResp}`;
-  }
-}
-
-// Try to execute assistant actions
-async function tryExecuteAssistantAction(question, message) {
-  try {
-    // Check for action keywords
-    const actionKeywords = {
-      delete: /supprim|delete|remove|vire/i,
-      monitor: /surveille|monitor|track|watch/i,
-      ban: /ban|kick|expuls/i,
-      clear: /clear|clean|wipe|vide/i,
-      mute: /mute|silence|lock/i
-    };
-
-    let actionType = null;
-    for (const [key, regex] of Object.entries(actionKeywords)) {
-      if (regex.test(question)) {
-        actionType = key;
-        break;
-      }
-    }
-
-    if (!actionType) return false; // No action detected
-
-    // If creator, execute the action
-    if (message.author.id === config.creatorId) {
-      switch (actionType) {
-        case 'delete':
-          await executeDeleteAction(message);
-          break;
-        case 'monitor':
-          await executeMonitorAction(message, question);
-          break;
-        case 'ban':
-          await executeBanAction(message, question);
-          break;
-        case 'clear':
-          await executeClearAction(message, question);
-          break;
-        case 'mute':
-          await executeMuteAction(message, question);
-          break;
-      }
-      return true; // Action executed
-    }
-
-    // For non-creators, don't respond (let AI handle it normally)
-    return false;
-  } catch (error) {
-    console.error('❌ Erreur exécution action assistant:', error);
-    return false;
-  }
-}
+// tryExecuteAssistantAction() - REMOVED (dead code, never called)
 
 // Generate IA refusal response for unauthorized action requests
 async function generateAndSendRefusalResponse(message, actionName, creatorMention) {
@@ -3856,7 +2698,7 @@ async function handleAskCommand(interaction) {
       const newNumber = parseInt(countingResetMatch[1], 10);
       const targetChannelId = config.countingChannelId;
       if (!targetChannelId) {
-        await interaction.editReply('❌ countingChannelId manquant dans config.json');
+        await interaction.editReply('❌ countingChannelId manquant dans la variable d\'environnement COUNTING_CHANNEL_ID');
         return;
       }
       await setCountingState(targetChannelId, newNumber, null);
@@ -4157,7 +2999,7 @@ client.on('messageCreate', async (message) => {
     return;
   }
 
-  const handledStoryContribution = await handleStoryContribution(message);
+  const handledStoryContribution = await handleStoryContribution(message, client, config);
   if (handledStoryContribution) {
     return;
   }
@@ -4500,7 +3342,7 @@ client.on('interactionCreate', async (interaction) => {
     return;
   }
 
-  const game = actionVeriteGames.get(interaction.message.id);
+  const game = getActionVeriteGames().get(interaction.message.id);
   if (!game) {
     await interaction.reply({
       content: 'Cette partie est terminée ou inactive.',
@@ -4509,7 +3351,7 @@ client.on('interactionCreate', async (interaction) => {
     return;
   }
 
-  const lock = actionVeriteLocks.get(interaction.message.id) ?? Promise.resolve();
+  const lock = getActionVeriteLocks().get(interaction.message.id) ?? Promise.resolve();
   const nextLock = lock.then(async () => {
     if (action === 'termine') {
       if (!game.activeUserId) {
@@ -4568,7 +3410,7 @@ client.on('interactionCreate', async (interaction) => {
     await interaction.channel.send(`${interaction.user} a choisi **${choiceLabel}** ! ${threadMessage}`);
   });
 
-  actionVeriteLocks.set(interaction.message.id, nextLock.catch(() => {}));
+  getActionVeriteLocks().set(interaction.message.id, nextLock.catch(() => {}));
   await nextLock;
 });
 
@@ -4897,6 +3739,7 @@ await initializeAIConsciousness('openai');
 await initializeGeneralPrompt();
 
 client.login(config.token);
+
 
 
 
