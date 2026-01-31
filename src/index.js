@@ -43,6 +43,7 @@ import { handleConfession, handleAdminConfessionLookup } from './handlers/confes
 import { handleSupportCommand } from './handlers/support.js';
 import { handleWordGame, handleWordStats } from './handlers/word-game.js';
 import { handleThreadCreation } from './handlers/thread.js';
+import { getChannelForFeature } from './utils/channel-helper.js';
 import { handleStoryContribution, finishStory, getActiveStories, setActiveStory, deleteActiveStory } from './handlers/story.js';
 import { handleActionVeriteCommand, getActionVeriteGames, getActionVeriteLocks, createActionVeriteRow } from './handlers/action-verite.js';
 import { handleQuizCommand, getActiveQuiz } from './handlers/quiz.js';
