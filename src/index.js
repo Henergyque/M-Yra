@@ -3065,7 +3065,7 @@ client.on('messageCreate', async (message) => {
   }
 });
 
-client.once('ready', async () => {
+client.once('clientReady', async () => {
   console.log(`Bot connecté en tant que ${client.user.tag}`);
   client.user.setPresence({
     activities: [{ name: '☕ !support', type: 0 }]
