@@ -63,7 +63,7 @@ Consider:
 - Attachments suggest image_analysis
 - Questions about facts/news suggest research
 - Creative/narrative style suggests story
-- Emotionally charged language suggests humor or general
+- Highly expressive language suggests humor or general
 - Sarcasm/jokes suggest humor
 - Argumentative tone suggests debate
 - Technical/code mentions suggest code_help
