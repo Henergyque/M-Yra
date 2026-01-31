@@ -27,7 +27,7 @@ Rends ça DRAMATIQUE, ABSURDE et HILARANT! Ajoute des didascalies avec des actio
     }
 
     const response = await grok.chat.completions.create({
-      model: 'grok-4.1-fast-reasoning',
+        model: 'grok-4-1-fast-reasoning',
       messages: [
         {
           role: 'system',
@@ -117,7 +117,7 @@ export async function handleStoryContribution(message, client, config) {
 
   if (phraseCount > 3) {
     const grokReply = await grok.chat.completions.create({
-      model: 'grok-4.1-fast-reasoning',
+      model: 'grok-4-1-fast-reasoning',
       messages: [{ role: 'user', content: `L'utilisateur a écrit trop de phrases (${phraseCount} au lieu de 3 max). Réponds en 1 ligne pour lui rappeler la limite.` }],
       max_completion_tokens: 50
     });

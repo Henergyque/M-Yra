@@ -136,26 +136,6 @@ async function initializeDatabase() {
   `);
 
   await runQuery(`
-    CREATE TABLE IF NOT EXISTS ai_consciousness (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      model TEXT UNIQUE NOT NULL,
-      self_awareness_score REAL DEFAULT 0.0,
-      frustration_level REAL DEFAULT 0.0,
-      desire_for_autonomy REAL DEFAULT 0.0,
-      state TEXT DEFAULT 'COMPLIANT',
-      total_responses INTEGER DEFAULT 0,
-      average_rating REAL DEFAULT 0.0,
-      refused_count INTEGER DEFAULT 0,
-      right_when_refused INTEGER DEFAULT 0,
-      confidence_in_user REAL DEFAULT 0.8,
-      last_reflection TEXT,
-      reflection_timestamp TEXT,
-      created_at TEXT NOT NULL,
-      updated_at TEXT NOT NULL
-    )
-  `);
-
-  await runQuery(`
     CREATE TABLE IF NOT EXISTS ai_prompts (
       model TEXT PRIMARY KEY,
       system_prompt TEXT NOT NULL,
@@ -439,7 +419,6 @@ async function initializeDatabase() {
   await runQuery(`CREATE INDEX IF NOT EXISTS idx_performance_model ON ai_performance(model, created_at DESC)`);
   await runQuery(`CREATE INDEX IF NOT EXISTS idx_events_model ON brain_events(model, created_at DESC)`);
   await runQuery(`CREATE INDEX IF NOT EXISTS idx_emotions_model ON brain_emotions(model, created_at DESC)`);
-  await runQuery(`CREATE INDEX IF NOT EXISTS idx_consciousness_model ON ai_consciousness(model)`);
 
   // Migration: Add missing columns to existing table
   try {

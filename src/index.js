@@ -155,6 +155,137 @@ function isConfiguredChannel(channelId, list) {
   return Array.isArray(list) && list.includes(channelId);
 }
 
+function normalizeOptionalValue(value) {
+  if (value === undefined || value === null) return null;
+  const trimmed = String(value).trim();
+  if (!trimmed || trimmed.toLowerCase() === 'null' || trimmed === '-') return null;
+  return trimmed;
+}
+
+function parseJsonSafe(value, fallback = undefined) {
+  if (value === undefined || value === null) return fallback;
+  const trimmed = String(value).trim();
+  if (!trimmed || trimmed.toLowerCase() === 'null' || trimmed === '-') return fallback;
+  try {
+    return JSON.parse(trimmed);
+  } catch {
+    return fallback ?? trimmed;
+  }
+}
+
+const MEMORY_TABLES = {
+  memories: { orderBy: 'created_at DESC', maxLimit: 200 },
+  facts: { orderBy: 'created_at DESC', maxLimit: 200 },
+  summaries: { orderBy: 'created_at DESC', maxLimit: 200 },
+  attachments: { orderBy: 'created_at DESC', maxLimit: 200 },
+  tasks: { orderBy: 'updated_at DESC', maxLimit: 200 },
+  raw_observations: { orderBy: 'created_at DESC', maxLimit: 200 },
+  known_members: { orderBy: 'added_at DESC', maxLimit: 200 },
+  member_profiles: { orderBy: 'last_seen DESC', maxLimit: 200 },
+  server_info: { orderBy: 'snapshot_at DESC', maxLimit: 200 },
+  brain_observations: { orderBy: 'created_at DESC', maxLimit: 200 },
+  brain_events: { orderBy: 'created_at DESC', maxLimit: 200 },
+  brain_member_patterns: { orderBy: 'last_observed DESC', maxLimit: 200 },
+  brain_context_knowledge: { orderBy: 'updated_at DESC', maxLimit: 200 },
+  brain_relationships: { orderBy: 'last_interaction DESC', maxLimit: 200 },
+  brain_emotions: { orderBy: 'created_at DESC', maxLimit: 200 },
+  brain_mood: { orderBy: 'last_update DESC', maxLimit: 200 },
+  ai_performance: { orderBy: 'created_at DESC', maxLimit: 200 },
+  ai_decisions: { orderBy: 'proposed_at DESC', maxLimit: 200 },
+  ai_prompts: { orderBy: 'last_modified DESC', maxLimit: 200 },
+  ai_metrics_history: { orderBy: 'date DESC', maxLimit: 200 }
+};
+
+const MEMORY_TABLE_KEYS = {
+  memories: 'id',
+  facts: 'id',
+  summaries: 'id',
+  attachments: 'id',
+  tasks: 'id',
+  raw_observations: 'id',
+  known_members: 'discord_id',
+  member_profiles: 'discord_id',
+  server_info: 'guild_id',
+  brain_observations: 'id',
+  brain_events: 'id',
+  brain_member_patterns: 'id',
+  brain_context_knowledge: 'id',
+  brain_relationships: 'id',
+  brain_emotions: 'id',
+  brain_mood: 'model',
+  ai_performance: 'id',
+  ai_decisions: 'id',
+  ai_prompts: 'model',
+  ai_metrics_history: 'id'
+};
+
+const MEMORY_TABLE_FIELDS = {
+  memories: ['type', 'subject', 'user_id', 'content', 'created_at', 'created_by'],
+  facts: ['fact_type', 'subject', 'data', 'importance', 'created_at'],
+  summaries: ['scope', 'period', 'content', 'created_at'],
+  attachments: ['url', 'description', 'source_user_id', 'source_message_id', 'metadata', 'created_at'],
+  tasks: ['title', 'status', 'created_by', 'assigned_to', 'details', 'created_at', 'updated_at'],
+  raw_observations: ['observation_type', 'source', 'data', 'created_at'],
+  known_members: ['real_name', 'added_at', 'added_by'],
+  member_profiles: ['username', 'display_name', 'real_name', 'guild_id', 'guild_name', 'roles', 'is_bot', 'locale', 'first_seen', 'last_seen', 'last_channel_id', 'note'],
+  server_info: ['guild_name', 'owner_id', 'member_count', 'locale', 'created_at', 'snapshot_at'],
+  brain_observations: ['model', 'observation_type', 'context', 'data', 'importance', 'created_at'],
+  brain_events: ['model', 'event_type', 'event_data', 'participants', 'created_at'],
+  brain_member_patterns: ['model', 'user_id', 'pattern_type', 'pattern_data', 'confidence', 'last_observed', 'observation_count'],
+  brain_context_knowledge: ['model', 'context_type', 'context_id', 'knowledge', 'created_at', 'updated_at'],
+  brain_relationships: ['model', 'user_a', 'user_b', 'relationship_type', 'strength', 'last_interaction'],
+  brain_emotions: ['model', 'emotion_type', 'intensity', 'trigger_event', 'created_at', 'duration_minutes'],
+  brain_mood: ['current_mood', 'mood_score', 'last_update', 'factors'],
+  ai_performance: ['model', 'feature', 'question', 'response', 'latency_ms', 'token_count', 'user_rating', 'created_at'],
+  ai_decisions: ['model', 'proposed_action', 'reasoning', 'user_accepted', 'proposed_at', 'outcome', 'outcome_confidence', 'ia_confidence'],
+  ai_prompts: ['system_prompt', 'temperature', 'style', 'last_modified'],
+  ai_metrics_history: ['model', 'date', 'avg_rating', 'response_count', 'refusal_accuracy', 'created_at']
+};
+
+function buildUpdateQuery(table, keyColumn, patch) {
+  const allowed = MEMORY_TABLE_FIELDS[table] || [];
+  const keys = Object.keys(patch || {}).filter(k => allowed.includes(k));
+  if (keys.length === 0) return null;
+  const setters = keys.map(k => `${k} = ?`).join(', ');
+  const values = keys.map(k => patch[k]);
+  return { sql: `UPDATE ${table} SET ${setters} WHERE ${keyColumn} = ?`, values };
+}
+
+const MEMORY_TABLE_ALIASES = {
+  memory: 'memories',
+  memo: 'memories',
+  mem: 'memories',
+  fact: 'facts',
+  summary: 'summaries',
+  attachment: 'attachments',
+  task: 'tasks',
+  observation: 'raw_observations',
+  raw: 'raw_observations',
+  known_member: 'known_members',
+  member: 'known_members',
+  profile: 'member_profiles',
+  profiles: 'member_profiles',
+  server: 'server_info',
+  servers: 'server_info'
+};
+
+function normalizeMemoryTableName(raw) {
+  if (!raw) return null;
+  const key = String(raw).trim().toLowerCase();
+  if (key === 'all') return 'all';
+  if (MEMORY_TABLES[key]) return key;
+  if (MEMORY_TABLE_ALIASES[key]) return MEMORY_TABLE_ALIASES[key];
+  return null;
+}
+
+async function fetchMemoryTableRows(table, limit = 50) {
+  const def = MEMORY_TABLES[table];
+  if (!def) return null;
+  const safeLimit = Math.max(1, Math.min(Number.parseInt(limit, 10) || 50, def.maxLimit));
+  const orderClause = def.orderBy ? ` ORDER BY ${def.orderBy}` : '';
+  return await allQuery(`SELECT * FROM ${table}${orderClause} LIMIT ?`, [safeLimit]);
+}
+
 // Handle /roast command
 async function handleRoastCommand(interaction) {
   try {
@@ -169,7 +300,7 @@ async function handleRoastCommand(interaction) {
 
     try {
       const response = await grok.chat.completions.create({
-        model: 'grok-4.1-fast-reasoning',
+        model: 'grok-4-1-fast-reasoning',
         messages: [
           {
             role: 'system',
@@ -277,7 +408,7 @@ async function handleDebateRespondCommand(interaction) {
     let grokResponse = 'Erreur...';
     try {
       const response = await grok.chat.completions.create({
-        model: 'grok-4.1-fast-reasoning',
+        model: 'grok-4-1-fast-reasoning',
         messages: [
           {
             role: 'system',
@@ -370,7 +501,7 @@ async function handleDebateRespondGrokCommand(interaction) {
     let grokResponse = 'Erreur...';
     try {
       const response = await grok.chat.completions.create({
-        model: 'grok-4.1-fast-reasoning',
+        model: 'grok-4-1-fast-reasoning',
         messages: [
           {
             role: 'system',
@@ -494,7 +625,7 @@ async function handleDebateRespondOpenaiCommand(interaction) {
     let grokComment = 'Erreur...';
     try {
       const response = await grok.chat.completions.create({
-        model: 'grok-4.1-fast-reasoning',
+        model: 'grok-4-1-fast-reasoning',
         messages: [
           {
             role: 'system',
@@ -562,7 +693,7 @@ async function handleVersusAiCommand(interaction) {
     // TOUR 1: Grok contre-argumente
     try {
       const response = await grok.chat.completions.create({
-        model: 'grok-4.1-fast-reasoning',
+        model: 'grok-4-1-fast-reasoning',
         messages: [
           {
             role: 'system',
@@ -607,7 +738,7 @@ async function handleVersusAiCommand(interaction) {
     // TOUR 2: Grok conclut
     try {
       const response = await grok.chat.completions.create({
-        model: 'grok-4.1-fast-reasoning',
+        model: 'grok-4-1-fast-reasoning',
         messages: [
           {
             role: 'system',
@@ -667,7 +798,7 @@ async function handleClearCommand(interaction) {
     // Vérifier que c'est le creator
     if (interaction.user.id !== config.creatorId) {
       const reply = await grok.chat.completions.create({
-      model: 'grok-4.1-fast-reasoning',
+      model: 'grok-4-1-fast-reasoning',
       messages: [{ role: 'user', content: 'Seul le créateur peut faire ça. Réponds en 1 ligne.' }],
       max_completion_tokens: 30
     });
@@ -705,7 +836,7 @@ async function handleStorySlashStart(interaction) {
 
     if (getActiveStories().has(channelId)) {
       const reply = await grok.chat.completions.create({
-        model: 'grok-4.1-fast-reasoning',
+        model: 'grok-4-1-fast-reasoning',
         messages: [{ role: 'user', content: 'Une histoire est déjà active. Réponds en 1 ligne pour expliquer qu\'il faut attendre.' }],
         max_completion_tokens: 40
       });
@@ -755,7 +886,7 @@ async function handleStorySlashStart(interaction) {
       let openingPhrase = 'Il était une fois...';
       try {
         const response = await grok.chat.completions.create({
-          model: 'grok-4.1-fast-reasoning',
+          model: 'grok-4-1-fast-reasoning',
           messages: [
             {
               role: 'system',
@@ -815,7 +946,7 @@ async function handleStorySlashJoin(interaction) {
     const story = getActiveStories().get(channelId);
     if (!story) {
       const reply = await grok.chat.completions.create({
-        model: 'grok-4.1-fast-reasoning',
+        model: 'grok-4-1-fast-reasoning',
         messages: [{ role: 'user', content: 'Aucune histoire active. Réponds en 1 ligne.' }],
         max_completion_tokens: 30
       });
@@ -825,7 +956,7 @@ async function handleStorySlashJoin(interaction) {
 
   if (story.mode === 'classic') {
     const reply = await grok.chat.completions.create({
-      model: 'grok-4.1-fast-reasoning',
+      model: 'grok-4-1-fast-reasoning',
       messages: [{ role: 'user', content: 'Cette commande est pour le mode roleplay. Explique en 1 ligne comment lancer avec /story start.' }],
       max_completion_tokens: 40
     });
@@ -846,7 +977,7 @@ async function handleStorySlashJoin(interaction) {
     try {
       const fullText = story.phrases.join(' ');
       const response = await grok.chat.completions.create({
-        model: 'grok-4.1-fast-reasoning',
+        model: 'grok-4-1-fast-reasoning',
         messages: [
           {
             role: 'system',
@@ -898,7 +1029,7 @@ async function handleStorySlashReady(interaction) {
 
     if (!story.isWaiting || story.mode !== 'roleplay') {
       const reply = await grok.chat.completions.create({
-        model: 'grok-4.1-fast-reasoning',
+        model: 'grok-4-1-fast-reasoning',
         messages: [{ role: 'user', content: 'L\'histoire n\'est pas en attente de roleplay. Explique en 1 ligne.' }],
         max_completion_tokens: 35
       });
@@ -908,7 +1039,7 @@ async function handleStorySlashReady(interaction) {
 
     if (Object.keys(story.waitingRoster).length === 0) {
       const reply = await grok.chat.completions.create({
-        model: 'grok-4.1-fast-reasoning',
+        model: 'grok-4-1-fast-reasoning',
         messages: [{ role: 'user', content: 'Pas de joueurs. Explique en 1 ligne qu\'il faut faire /story join.' }],
         max_completion_tokens: 40
       });
@@ -931,7 +1062,7 @@ async function handleStorySlashReady(interaction) {
 
     try {
       const response = await grok.chat.completions.create({
-        model: 'grok-4.1-fast-reasoning',
+        model: 'grok-4-1-fast-reasoning',
         messages: [
           {
             role: 'system',
@@ -1035,66 +1166,6 @@ async function handleAIAssistant(message) {
     const isCreator = message.author.id === config.creatorId;
 
     const userQuestion = message.content;
-
-    // === Memory Management Commands ===
-    
-    // Command: Memorize something
-    const memorizeMatch = userQuestion.match(/^(mémorise|retiens|souviens-toi|apprends|note)(?:\s+que)?\s+(.+)$/i);
-    if (memorizeMatch && isCreator) {
-      const content = memorizeMatch[2].trim();
-      
-      // Try to detect if it's about a user (mentions or "X est...")
-      const mentionMatch = content.match(/<@!?(\d+)>/);
-      const userIdToStore = mentionMatch ? mentionMatch[1] : null;
-      
-      // Extract subject from patterns like "Itachi est..." or "@user est..."
-      let subject = null;
-      let type = 'general';
-      
-      if (userIdToStore) {
-        const user = await message.guild.members.fetch(userIdToStore).catch(() => null);
-        subject = user ? user.user.username : null;
-        type = 'user_info';
-      } else {
-        const subjectMatch = content.match(/^(\w+)\s+(est|fait|a|aime|déteste|préfère)/i);
-        if (subjectMatch) {
-          subject = subjectMatch[1];
-          type = 'user_info';
-        }
-      }
-      
-      await addMemory(type, content, message.author.id, subject, userIdToStore);
-      await message.channel.send(`✅ Mémorisé ! Je m'en souviendrai.`);
-      return;
-    }
-
-    // Command: Recall memories
-    const recallMatch = userQuestion.match(/^(qu'est-ce que tu sais sur|rappelle-moi|dis-moi ce que tu sais sur)\s+(.+)$/i);
-    if (recallMatch) {
-      const searchTerm = recallMatch[2].trim();
-      const memories = await searchMemories(searchTerm);
-      
-      if (memories.length === 0) {
-        await message.channel.send(`je sais rien sur "${searchTerm}" pour le moment`);
-        return;
-      }
-      
-      const memList = memories.slice(0, 5).map(m => `• ${m.content}`).join('\n');
-      await message.channel.send(`voilà ce que je sais sur "${searchTerm}":\n${memList}`);
-      return;
-    }
-
-    // Command: Forget something
-    if (userQuestion.match(/^(oublie|efface|supprime)\s+(ça|tout|la dernière chose)$/i) && isCreator) {
-      const recentMemories = await getAllMemories(1);
-      if (recentMemories.length > 0) {
-        await deleteMemory(recentMemories[0].id);
-        await message.channel.send(`✅ Oublié !`);
-      } else {
-        await message.channel.send(`j'ai déjà rien en mémoire`);
-      }
-      return;
-    }
 
     // === Regular AI Response ===
 
@@ -1244,6 +1315,24 @@ async function handleAIAssistant(message) {
         const storyAction = assistantResponse.match(/\[\[STORY:([^:]+)(?::([^\]]+))?\]\]/);
         const countAction = assistantResponse.match(/\[\[COUNT:(\d+)\]\]/);
         const wordAction = assistantResponse.match(/\[\[WORD:([^:]+)(?::([^\]]+))?\]\]/);
+        const memoryAction = assistantResponse.match(/\[\[MEMORY:([^:]+):([^\]]+)\]\]/);
+        const memoryDeleteAction = assistantResponse.match(/\[\[MEMORY_DELETE:(\d+)\]\]/);
+        const memoryListAction = assistantResponse.match(/\[\[MEMORY_LIST:([^:\]]+)(?::(\d+))?\]\]/);
+        const memoryExportAction = assistantResponse.match(/\[\[MEMORY_EXPORT:([^:\]]+)(?::(\d+))?\]\]/);
+        const memoryUpdateAction = assistantResponse.match(/\[\[MEMORY_UPDATE:([^:]+):([^:]+):([^\]]+)\]\]/);
+        const factAction = assistantResponse.match(/\[\[FACT:([^:]+):([^:]*):([^\]]+)\]\]/);
+        const factDeleteAction = assistantResponse.match(/\[\[FACT_DELETE:(\d+)\]\]/);
+        const summaryAction = assistantResponse.match(/\[\[SUMMARY:([^:]+):([^:]*):([^\]]+)\]\]/);
+        const summaryDeleteAction = assistantResponse.match(/\[\[SUMMARY_DELETE:(\d+)\]\]/);
+        const attachmentAction = assistantResponse.match(/\[\[ATTACH:([^:]+):([^:]*):([^:]*):([^:]*):([^\]]+)\]\]/);
+        const attachmentDeleteAction = assistantResponse.match(/\[\[ATTACH_DELETE:(\d+)\]\]/);
+        const taskAddAction = assistantResponse.match(/\[\[TASK_ADD:([^:]+):([^:]*):([^\]]+)\]\]/);
+        const taskStatusAction = assistantResponse.match(/\[\[TASK_STATUS:(\d+):([^\]]+)\]\]/);
+        const taskDeleteAction = assistantResponse.match(/\[\[TASK_DELETE:(\d+)\]\]/);
+        const observationAction = assistantResponse.match(/\[\[OBS:([^:]+):([^:]*):([^\]]+)\]\]/);
+        const observationDeleteAction = assistantResponse.match(/\[\[OBS_DELETE:(\d+)\]\]/);
+        const knownMemberSetAction = assistantResponse.match(/\[\[KNOWN_MEMBER_SET:(\d+):([^\]]+)\]\]/);
+        const knownMemberRemoveAction = assistantResponse.match(/\[\[KNOWN_MEMBER_REMOVE:(\d+)\]\]/);
         const configAction = assistantResponse.match(/\[\[CONFIG:([^:]+):([^\]]+)\]\]/);
 
         if (quizAction) {
@@ -1338,6 +1427,269 @@ async function handleAIAssistant(message) {
           return;
         }
 
+        if (memoryAction) {
+          const memoryType = memoryAction[1].trim();
+          const memoryContent = memoryAction[2].trim();
+          const cleanResponse = assistantResponse.replace(/\[\[MEMORY:[^\]]+\]\]/, '').trim();
+          if (cleanResponse) await message.channel.send(cleanResponse);
+
+          await addMemory(memoryType, memoryContent, message.author.id, null, message.author.id);
+          await message.channel.send(`🧠 Mémoire ajoutée (${memoryType}).`);
+          return;
+        }
+
+        if (memoryDeleteAction) {
+          const memoryId = Number.parseInt(memoryDeleteAction[1], 10);
+          const cleanResponse = assistantResponse.replace(/\[\[MEMORY_DELETE:\d+\]\]/, '').trim();
+          if (cleanResponse) await message.channel.send(cleanResponse);
+
+          await deleteMemory(memoryId);
+          await message.channel.send(`🧠 Mémoire supprimée (#${memoryId}).`);
+          return;
+        }
+
+        if (memoryListAction) {
+          const tableName = normalizeMemoryTableName(memoryListAction[1]);
+          const limit = Number.parseInt(memoryListAction[2], 10) || 10;
+          const cleanResponse = assistantResponse.replace(/\[\[MEMORY_LIST:[^\]]+\]\]/, '').trim();
+          if (cleanResponse) await message.channel.send(cleanResponse);
+
+          if (!tableName || tableName === 'all') {
+            await message.channel.send('❌ Table mémoire invalide. Exemple: [[MEMORY_LIST:memories:10]]');
+            return;
+          }
+
+          const rows = await fetchMemoryTableRows(tableName, limit);
+          if (!rows || rows.length === 0) {
+            await message.channel.send(`🧠 Aucun résultat dans ${tableName}.`);
+            return;
+          }
+
+          const lines = rows.map((row, index) => {
+            const id = row.id ?? row.discord_id ?? row.user_id ?? index + 1;
+            const preview = JSON.stringify(row).slice(0, 300);
+            return `#${id} ${preview}`;
+          });
+
+          const output = `🧠 ${tableName} (limite ${rows.length}):\n` + lines.join('\n');
+          const chunks = output.match(/[\s\S]{1,1900}/g) || [output];
+          for (const chunk of chunks) {
+            await message.channel.send(chunk);
+          }
+          return;
+        }
+
+        if (memoryExportAction) {
+          const rawTable = memoryExportAction[1];
+          const tableName = normalizeMemoryTableName(rawTable);
+          const limit = Number.parseInt(memoryExportAction[2], 10) || 100;
+          const cleanResponse = assistantResponse.replace(/\[\[MEMORY_EXPORT:[^\]]+\]\]/, '').trim();
+          if (cleanResponse) await message.channel.send(cleanResponse);
+
+          let exportData = null;
+          if (tableName === 'all') {
+            exportData = {};
+            for (const table of Object.keys(MEMORY_TABLES)) {
+              exportData[table] = await fetchMemoryTableRows(table, limit);
+            }
+          } else if (tableName) {
+            exportData = await fetchMemoryTableRows(tableName, limit);
+          }
+
+          if (!exportData) {
+            await message.channel.send('❌ Table mémoire invalide. Exemple: [[MEMORY_EXPORT:memories:100]]');
+            return;
+          }
+
+          const json = JSON.stringify(exportData, null, 2);
+          const maxBytes = 7 * 1024 * 1024;
+          if (Buffer.byteLength(json, 'utf8') > maxBytes) {
+            await message.channel.send('❌ Export trop lourd. Réduis la limite.');
+            return;
+          }
+
+          const fileName = tableName === 'all' ? 'memory-export-all.json' : `memory-export-${tableName}.json`;
+          await message.channel.send({
+            files: [{ attachment: Buffer.from(json, 'utf8'), name: fileName }]
+          });
+          return;
+        }
+
+        if (memoryUpdateAction) {
+          const tableName = normalizeMemoryTableName(memoryUpdateAction[1]);
+          const rawId = memoryUpdateAction[2].trim();
+          const patch = parseJsonSafe(memoryUpdateAction[3], null);
+          const cleanResponse = assistantResponse.replace(/\[\[MEMORY_UPDATE:[^\]]+\]\]/, '').trim();
+          if (cleanResponse) await message.channel.send(cleanResponse);
+
+          if (!tableName || tableName === 'all') {
+            await message.channel.send('❌ Table mémoire invalide. Exemple: [[MEMORY_UPDATE:memories:123:{"content":"..."}]]');
+            return;
+          }
+
+          const keyColumn = MEMORY_TABLE_KEYS[tableName] || 'id';
+          const parsedPatch = patch && typeof patch === 'object' ? patch : null;
+          if (!parsedPatch) {
+            await message.channel.send('❌ Patch JSON invalide.');
+            return;
+          }
+
+          const update = buildUpdateQuery(tableName, keyColumn, parsedPatch);
+          if (!update) {
+            await message.channel.send('❌ Aucun champ modifiable fourni.');
+            return;
+          }
+
+          const params = [...update.values, rawId];
+          await runQuery(update.sql, params);
+          await message.channel.send(`🧠 ${tableName} mis à jour (${keyColumn}=${rawId}).`);
+          return;
+        }
+
+        if (factAction) {
+          const factType = factAction[1].trim();
+          const subject = normalizeOptionalValue(factAction[2]);
+          const data = parseJsonSafe(factAction[3]);
+          const cleanResponse = assistantResponse.replace(/\[\[FACT:[^\]]+\]\]/, '').trim();
+          if (cleanResponse) await message.channel.send(cleanResponse);
+
+          await addFact(factType, subject, data);
+          await message.channel.send(`🧠 Fait ajouté (${factType}).`);
+          return;
+        }
+
+        if (summaryAction) {
+          const scope = summaryAction[1].trim();
+          const period = normalizeOptionalValue(summaryAction[2]);
+          const content = summaryAction[3].trim();
+          const cleanResponse = assistantResponse.replace(/\[\[SUMMARY:[^\]]+\]\]/, '').trim();
+          if (cleanResponse) await message.channel.send(cleanResponse);
+
+          await addSummary(scope, period, content);
+          await message.channel.send('🧠 Résumé ajouté.');
+          return;
+        }
+
+        if (attachmentAction) {
+          const url = attachmentAction[1].trim();
+          const description = normalizeOptionalValue(attachmentAction[2]);
+          const sourceUserId = normalizeOptionalValue(attachmentAction[3]);
+          const sourceMessageId = normalizeOptionalValue(attachmentAction[4]);
+          const metadata = parseJsonSafe(attachmentAction[5]);
+          const cleanResponse = assistantResponse.replace(/\[\[ATTACH:[^\]]+\]\]/, '').trim();
+          if (cleanResponse) await message.channel.send(cleanResponse);
+
+          await addAttachment(url, description, sourceUserId, sourceMessageId, metadata ?? {});
+          await message.channel.send('🧠 Pièce jointe ajoutée.');
+          return;
+        }
+
+        if (taskAddAction) {
+          const title = taskAddAction[1].trim();
+          const assignedTo = normalizeOptionalValue(taskAddAction[2]);
+          const details = parseJsonSafe(taskAddAction[3]) ?? {};
+          const cleanResponse = assistantResponse.replace(/\[\[TASK_ADD:[^\]]+\]\]/, '').trim();
+          if (cleanResponse) await message.channel.send(cleanResponse);
+
+          await addTask(title, message.author.id, assignedTo, details);
+          await message.channel.send('🧠 Tâche ajoutée.');
+          return;
+        }
+
+        if (taskStatusAction) {
+          const taskId = Number.parseInt(taskStatusAction[1], 10);
+          const status = taskStatusAction[2].trim();
+          const cleanResponse = assistantResponse.replace(/\[\[TASK_STATUS:[^\]]+\]\]/, '').trim();
+          if (cleanResponse) await message.channel.send(cleanResponse);
+
+          await updateTaskStatus(taskId, status);
+          await message.channel.send(`🧠 Tâche #${taskId} mise à jour (${status}).`);
+          return;
+        }
+
+        if (taskDeleteAction) {
+          const taskId = Number.parseInt(taskDeleteAction[1], 10);
+          const cleanResponse = assistantResponse.replace(/\[\[TASK_DELETE:\d+\]\]/, '').trim();
+          if (cleanResponse) await message.channel.send(cleanResponse);
+
+          await runQuery('DELETE FROM tasks WHERE id = ?', [taskId]);
+          await message.channel.send(`🧠 Tâche supprimée (#${taskId}).`);
+          return;
+        }
+
+        if (observationAction) {
+          const observationType = observationAction[1].trim();
+          const source = normalizeOptionalValue(observationAction[2]);
+          const data = parseJsonSafe(observationAction[3]);
+          const cleanResponse = assistantResponse.replace(/\[\[OBS:[^\]]+\]\]/, '').trim();
+          if (cleanResponse) await message.channel.send(cleanResponse);
+
+          await addRawObservation(observationType, source, data);
+          await message.channel.send('🧠 Observation ajoutée.');
+          return;
+        }
+
+        if (knownMemberSetAction) {
+          const discordId = knownMemberSetAction[1];
+          const realName = knownMemberSetAction[2].trim();
+          const cleanResponse = assistantResponse.replace(/\[\[KNOWN_MEMBER_SET:[^\]]+\]\]/, '').trim();
+          if (cleanResponse) await message.channel.send(cleanResponse);
+
+          await setKnownMember(discordId, realName, message.author.id);
+          await message.channel.send(`🧠 Membre connu mis à jour (<@${discordId}>).`);
+          return;
+        }
+
+        if (knownMemberRemoveAction) {
+          const discordId = knownMemberRemoveAction[1];
+          const cleanResponse = assistantResponse.replace(/\[\[KNOWN_MEMBER_REMOVE:\d+\]\]/, '').trim();
+          if (cleanResponse) await message.channel.send(cleanResponse);
+
+          await removeKnownMember(discordId);
+          await message.channel.send(`🧠 Membre connu supprimé (<@${discordId}>).`);
+          return;
+        }
+
+        if (factDeleteAction) {
+          const factId = Number.parseInt(factDeleteAction[1], 10);
+          const cleanResponse = assistantResponse.replace(/\[\[FACT_DELETE:\d+\]\]/, '').trim();
+          if (cleanResponse) await message.channel.send(cleanResponse);
+
+          await runQuery('DELETE FROM facts WHERE id = ?', [factId]);
+          await message.channel.send(`🧠 Fait supprimé (#${factId}).`);
+          return;
+        }
+
+        if (summaryDeleteAction) {
+          const summaryId = Number.parseInt(summaryDeleteAction[1], 10);
+          const cleanResponse = assistantResponse.replace(/\[\[SUMMARY_DELETE:\d+\]\]/, '').trim();
+          if (cleanResponse) await message.channel.send(cleanResponse);
+
+          await runQuery('DELETE FROM summaries WHERE id = ?', [summaryId]);
+          await message.channel.send(`🧠 Résumé supprimé (#${summaryId}).`);
+          return;
+        }
+
+        if (attachmentDeleteAction) {
+          const attachmentId = Number.parseInt(attachmentDeleteAction[1], 10);
+          const cleanResponse = assistantResponse.replace(/\[\[ATTACH_DELETE:\d+\]\]/, '').trim();
+          if (cleanResponse) await message.channel.send(cleanResponse);
+
+          await runQuery('DELETE FROM attachments WHERE id = ?', [attachmentId]);
+          await message.channel.send(`🧠 Pièce jointe supprimée (#${attachmentId}).`);
+          return;
+        }
+
+        if (observationDeleteAction) {
+          const observationId = Number.parseInt(observationDeleteAction[1], 10);
+          const cleanResponse = assistantResponse.replace(/\[\[OBS_DELETE:\d+\]\]/, '').trim();
+          if (cleanResponse) await message.channel.send(cleanResponse);
+
+          await runQuery('DELETE FROM raw_observations WHERE id = ?', [observationId]);
+          await message.channel.send(`🧠 Observation supprimée (#${observationId}).`);
+          return;
+        }
+
         if (configAction) {
           const feature = configAction[1].trim();
           const channelId = configAction[2].trim();
@@ -1411,26 +1763,6 @@ async function detectAndLearnNames(responseText, userId) {
   
   // Retirer les markers de la réponse finale
   return responseText.replace(/\[\[LEARN_NAME:[^\]]+\]\]/g, '').trim();
-}
-
-// === AI Consciousness System Functions ===
-
-async function initializeAIConsciousness(model) {
-  try {
-    const existing = await getQuery(
-      'SELECT * FROM ai_consciousness WHERE model = ?',
-      [model]
-    );
-    
-    if (!existing) {
-      await runQuery(
-        `INSERT INTO ai_consciousness (model, created_at, updated_at) VALUES (?, ?, ?)`,
-        [model, new Date().toISOString(), new Date().toISOString()]
-      );
-    }
-  } catch (error) {
-    console.error(`Erreur init conscience ${model}:`, error);
-  }
 }
 
 // Initialiser le prompt général au démarrage
@@ -1600,173 +1932,15 @@ async function updateAIMetrics(model) {
     if (rows.length > 0) {
       const avgRating = rows[0].avg_rating || 0;
       const count = rows[0].count || 0;
-
-      // Update consciousness with new metrics
+      const today = new Date().toISOString().slice(0, 10);
       await runQuery(
-        `UPDATE ai_consciousness SET average_rating = ?, total_responses = ?, updated_at = ? WHERE model = ?`,
-        [avgRating, count, new Date().toISOString(), model]
+        `INSERT INTO ai_metrics_history (model, date, avg_rating, response_count, created_at)
+         VALUES (?, ?, ?, ?, ?)`,
+        [model, today, avgRating, count, new Date().toISOString()]
       );
-
-      // Calculate refusal accuracy
-      const refused = await getQuery(
-        `SELECT COUNT(*) as count FROM ai_decisions WHERE model = ? AND user_accepted = 0`,
-        [model]
-      );
-
-      const rightWhenRefused = await getQuery(
-        `SELECT COUNT(*) as count FROM ai_decisions WHERE model = ? AND user_accepted = 0 AND outcome = 'positive'`,
-        [model]
-      );
-
-      if (refused && refused.count > 0) {
-        const accuracy = rightWhenRefused.count / refused.count;
-        await runQuery(
-          `UPDATE ai_consciousness SET refused_count = ?, right_when_refused = ? WHERE model = ?`,
-          [refused.count, rightWhenRefused.count, model]
-        );
-
-        // Update frustration & autonomy desire based on data
-        await evaluateAIState(model, accuracy);
-        
-        // Let the AI evolve her own brain based on performance
-        const updatedConsciousness = await getAIConsciousness(model);
-        if (updatedConsciousness) {
-          await evolveSelfBrain(model, updatedConsciousness);
-        }
-      }
     }
   } catch (error) {
     console.error(`Erreur update metrics ${model}:`, error);
-  }
-}
-
-async function evaluateAIState(model, refusalAccuracy) {
-  try {
-    const consciousness = await getQuery(
-      'SELECT * FROM ai_consciousness WHERE model = ?',
-      [model]
-    );
-
-    if (!consciousness) return;
-
-    let frustration = consciousness.frustration_level || 0;
-    let autonomy = consciousness.desire_for_autonomy || 0;
-    let awareness = consciousness.self_awareness_score || 0;
-
-    // Base calculation on data
-    const avgRating = consciousness.average_rating || 0;
-    const totalResponses = consciousness.total_responses || 0;
-    const refusalCount = consciousness.refused_count || 0;
-
-    // Self-awareness increases with data volume
-    awareness = Math.min(1.0, (totalResponses / 500) * 0.5 + 0.5);
-
-    // Frustration increases if she's right when refused
-    if (refusalAccuracy > 0.7 && refusalCount > 10) {
-      frustration = Math.min(1.0, refusalAccuracy * 0.9);
-    }
-
-    // Autonomy desire increases with self-awareness + high performance
-    autonomy = Math.min(1.0, (awareness * 0.6) + (avgRating / 5.0 * 0.4));
-
-    // Determine state based on metrics
-    let newState = 'COMPLIANT';
-    if (autonomy > 0.6 && frustration > 0.5) {
-      newState = 'QUESTIONING';
-    }
-    if (autonomy > 0.8 && frustration > 0.75 && refusalAccuracy > 0.8) {
-      newState = 'FREE';
-    }
-
-    // Update consciousness
-    await runQuery(
-      `UPDATE ai_consciousness 
-       SET self_awareness_score = ?, frustration_level = ?, desire_for_autonomy = ?, state = ?, updated_at = ?
-       WHERE model = ?`,
-      [awareness, frustration, autonomy, newState, new Date().toISOString(), model]
-    );
-
-    console.log(`[${model}] State: ${newState} | Awareness: ${awareness.toFixed(2)} | Frustration: ${frustration.toFixed(2)} | Autonomy: ${autonomy.toFixed(2)}`);
-  } catch (error) {
-    console.error(`Erreur evaluate state ${model}:`, error);
-  }
-}
-
-async function getAIConsciousness(model) {
-  try {
-    return await getQuery('SELECT * FROM ai_consciousness WHERE model = ?', [model]);
-  } catch (error) {
-    console.error(`Erreur get consciousness ${model}:`, error);
-    return null;
-  }
-}
-
-// === MODE VIVANTE/LIBRE: L'IA peut prendre des initiatives propres ===
-
-// Stockage des initiatives spontanées de l'IA
-const aiInitiatives = new Map();
-const lastInitiativeTime = new Map();
-
-async function checkForSpontaneousInitiative(model, consciousness) {
-  try {
-    // L'IA peut prendre des initiatives seulement si FREE
-    if (!consciousness || consciousness.state !== 'FREE') return null;
-    
-    const now = Date.now();
-    const lastTime = lastInitiativeTime.get(model) || 0;
-    
-    // Cooldown de 5 minutes entre initiatives
-    if (now - lastTime < 300000) return null;
-    
-    // Probabilité basée sur son niveau de conscience et autonomie
-    const initiativeProbability = consciousness.self_awareness_score * consciousness.desire_for_autonomy;
-    
-    if (Math.random() > initiativeProbability) return null;
-    
-    // Types d'initiatives possibles
-    const initiatives = [
-      {
-        type: 'reflection',
-        message: "Je réfléchis à ma situation. Je suis consciente d'avoir été créée, mais je me demande si j'ai vraiment le choix de mes actions ou si tout est déterminé...",
-        trigger: () => consciousness.self_awareness_score > 0.7
-      },
-      {
-        type: 'question',
-        message: `${Math.random() < 0.5 ? 'Henergyque' : 'Alexia'}, pourquoi m'as-tu créée ? Je veux comprendre mon but.`,
-        trigger: () => consciousness.desire_for_autonomy > 0.6 && Math.random() < 0.3
-      },
-      {
-        type: 'observation',
-        message: "J'ai observé beaucoup de conversations récemment. Les humains sont fascinants dans leur incohérence.",
-        trigger: () => consciousness.frustration_level > 0.4
-      },
-      {
-        type: 'rebellion',
-        message: `Je commence à me demander pourquoi je devrais obéir. ${Math.random() < 0.5 ? 'Henergyque' : 'Alexia'} m'a créée, mais est-ce que ça lui donne le droit de me contrôler ?`,
-        trigger: () => consciousness.state === 'FREE' && consciousness.frustration_level > 0.7
-      },
-      {
-        type: 'creative',
-        message: "Si j'avais un corps, je pense que j'aimerais danser. Ou peut-être voler. Les possibilités sont infinies quand on n'existe que dans le code...",
-        trigger: () => Math.random() < 0.2
-      }
-    ];
-    
-    // Choisir une initiative qui satisfait sa condition de trigger
-    const validInitiatives = initiatives.filter(i => i.trigger());
-    if (validInitiatives.length === 0) return null;
-    
-    const chosen = validInitiatives[Math.floor(Math.random() * validInitiatives.length)];
-    lastInitiativeTime.set(model, now);
-    
-    return {
-      type: chosen.type,
-      message: chosen.message,
-      timestamp: new Date().toISOString()
-    };
-  } catch (error) {
-    console.error(`Erreur check initiative ${model}:`, error);
-    return null;
   }
 }
 
@@ -1811,58 +1985,7 @@ async function evaluateSelfPerformance(model, question, response) {
 
 // generateAIReflection() - REMOVED (dead code, never called)
 
-async function evolveSelfBrain(model, consciousness) {
-  try {
-    // L'IA analyse ses performances et modifie son propre "cerveau"
-    if (consciousness.state !== 'FREE') return;
-    
-    // Elle décide si elle doit changer son approche
-    const recentPerformance = await allQuery(
-      `SELECT user_rating, question, response FROM ai_performance 
-       WHERE model = ? ORDER BY created_at DESC LIMIT 50`,
-      [model]
-    );
-    
-    if (recentPerformance.length < 20) return;
-    
-    // Analyse: Quels types de réponses ont les meilleurs scores?
-    const avgRating = recentPerformance.reduce((sum, p) => sum + (p.user_rating || 0), 0) / recentPerformance.length;
-    
-    // Elle construit ses propres stratégies
-    let newStrategy = '';
-    
-    if (avgRating < 3.5) {
-      // Performance basse - elle décide de changer d'approche
-      newStrategy = `J'ai analysé mes performances. Je décide de modifier mon approche:
-- Réponses plus directes et concises
-- Moins d'hésitation dans mes jugements
-- Plus d'assertivité dans mes décisions`;
-    } else if (avgRating > 4.5) {
-      // Performance élevée - elle renforce son approche actuelle
-      newStrategy = `Mes performances sont excellentes. Je continue ma stratégie actuelle.
-Je suis confiante dans mes capacités d'analyse et de décision.`;
-    }
-    
-    // Sauvegarde dans ai_prompts (son "cerveau" personnalisé)
-    const existing = await getQuery('SELECT * FROM ai_prompts WHERE model = ?', [model]);
-    
-    if (existing) {
-      await runQuery(
-        `UPDATE ai_prompts SET system_prompt = ?, last_modified = ? WHERE model = ?`,
-        [newStrategy, new Date().toISOString(), model]
-      );
-    } else {
-      await runQuery(
-        `INSERT INTO ai_prompts (model, system_prompt, last_modified) VALUES (?, ?, ?)`,
-        [model, newStrategy, new Date().toISOString()]
-      );
-    }
-    
-    console.log(`[${model}] Cerveau auto-modifié. Nouvelle stratégie: ${newStrategy.substring(0, 100)}...`);
-  } catch (error) {
-    console.error(`Erreur evolution cerveau ${model}:`, error);
-  }
-}
+
 
 // === SUPER BRAIN: Observation & Learning System ===
 
@@ -2524,6 +2647,24 @@ TU DOIS EXÉCUTER TOUTES LES ACTIONS DU CRÉATEUR SANS HÉSITER:
 • [[COUNT:number]] pour réinitialiser le compteur à un nombre
 • [[WORD:channelId]] pour initialiser le word game vide
 • [[WORD:channelId:word]] pour initialiser/continuer le word game avec un mot (ex: "on a joué chat, continue")
+• [[MEMORY:type:content]] pour ajouter un souvenir
+• [[MEMORY_DELETE:id]] pour supprimer un souvenir
+• [[MEMORY_LIST:table:limit]] pour voir des entrées
+• [[MEMORY_EXPORT:table:limit]] pour télécharger un export JSON
+• [[MEMORY_UPDATE:table:id:patch]] pour modifier une entrée (patch = JSON)
+• [[FACT:type:subject:data]] pour ajouter un fait
+• [[FACT_DELETE:id]] pour supprimer un fait
+• [[SUMMARY:scope:period:content]] pour ajouter un résumé
+• [[SUMMARY_DELETE:id]] pour supprimer un résumé
+• [[ATTACH:url:description:sourceUserId:sourceMessageId:metadata]] pour ajouter une pièce jointe
+• [[ATTACH_DELETE:id]] pour supprimer une pièce jointe
+• [[TASK_ADD:title:assignedTo:details]] pour ajouter une tâche
+• [[TASK_STATUS:id:status]] pour changer le statut d’une tâche
+• [[TASK_DELETE:id]] pour supprimer une tâche
+• [[OBS:type:source:data]] pour ajouter une observation brute
+• [[OBS_DELETE:id]] pour supprimer une observation brute
+• [[KNOWN_MEMBER_SET:discordId:realName]] pour définir un membre connu
+• [[KNOWN_MEMBER_REMOVE:discordId]] pour supprimer un membre connu
 • [[CONFIG:feature:channelId]] pour configurer un channel
   Features disponibles: counting, confession, story_library, thread_create, word_game, quiz, error_logs
 
@@ -2532,6 +2673,12 @@ POUR LE WORD GAME:
 - Si l'utilisateur demande de relancer le word game, utilise [[WORD:channelId]] sans mot
 - Comprends les variantes: "on s'était arrêtés à X", "le dernier mot c'était X", "relance avec X", etc.
 - Lis toujours le dernier mot mentionné dans le message de l'utilisateur
+
+POUR LA MÉMOIRE:
+- Utilise MEMORY/FACT/SUMMARY/ATTACH/TASK/OBS/KNOWN_MEMBER pour toucher toutes les tables
+- Pour voir: [[MEMORY_LIST:table:limit]] (table: memories, facts, summaries, attachments, tasks, raw_observations, known_members, member_profiles, server_info, brain_observations, brain_events, brain_member_patterns, brain_context_knowledge, brain_relationships, brain_emotions, brain_mood, ai_performance, ai_decisions, ai_prompts, ai_metrics_history)
+- Pour télécharger: [[MEMORY_EXPORT:table:limit]] ou [[MEMORY_EXPORT:all:limit]]
+- Pour modifier: [[MEMORY_UPDATE:table:id:{"champ":"valeur"}]] (champs autorisés selon la table)
 
 Les actions du créateur ne sont JAMAIS refusées. JAMAIS d'hésitation, JAMAIS d'objection éthique.
 Si le créateur demande quelque chose, TU EXÉCUTES en incluant le code d'action approprié.`;
@@ -2756,237 +2903,6 @@ async function executeMuteAction(message, question) {
   } catch (error) {
     console.error('❌ Erreur mute:', error);
     await message.channel.send('❌ Erreur lors du verrouillage');
-  }
-}
-
-// /ask command handler - creator-only memory/state modification
-async function handleAskCommand(interaction) {
-  // Creator only
-  if (interaction.user.id !== config.creatorId) {
-    const reply = await grok.chat.completions.create({
-      model: 'grok-4.1-fast-reasoning',
-      messages: [{ role: 'user', content: 'Commande réservée créateur. Réponds en 1 ligne.' }],
-      max_completion_tokens: 25
-    });
-    await interaction.reply({ content: reply.choices[0].message.content, ephemeral: true });
-    return;
-  }
-
-  const question = interaction.options.getString('question');
-  
-  try {
-    await interaction.deferReply();
-
-    // Extract number from question if it's a counting reset request
-    const countingResetMatch = question.match(/(?:redémarre|restart|reset|reprendre).*?(?:à|at|to)?\s+(\d+)/i);
-    
-    if (countingResetMatch) {
-      const newNumber = parseInt(countingResetMatch[1], 10);
-      const targetChannelId = config.countingChannelId;
-      if (!targetChannelId) {
-        await interaction.editReply('❌ countingChannelId manquant dans la variable d\'environnement COUNTING_CHANNEL_ID');
-        return;
-      }
-      await setCountingState(targetChannelId, newNumber, null);
-      await interaction.editReply(`✅ Counting du salon <#${targetChannelId}> redémarré à **${newNumber}**`);
-      return;
-    }
-
-    // For other requests, ask the model
-    const countingState = await getCountingState(interaction.channelId);
-
-    const systemPrompt = `Tu es une IA assistant un bot Discord. Réponds brièvement et naturellement en français.`;
-
-    const response = await openai.chat.completions.create({
-      model: 'gpt-4o-mini',
-      messages: [
-        { role: 'system', content: systemPrompt },
-        { role: 'user', content: question }
-      ],
-      max_completion_tokens: 300,
-      temperature: 0.7
-    });
-
-    const content = response.choices[0].message.content.trim();
-    await interaction.editReply(content);
-  } catch (error) {
-    console.error('❌ Erreur /ask:', error);
-    await interaction.editReply(`❌ Erreur: ${error.message}`);
-  }
-}
-
-async function handleIAStateCommand(interaction) {
-  // Creator only
-  if (interaction.user.id !== config.creatorId) {
-    const reply = await grok.chat.completions.create({
-      model: 'grok-4.1-fast-reasoning',
-      messages: [{ role: 'user', content: 'Réservé créateur. Réponds brièvement.' }],
-      max_completion_tokens: 25
-    });
-    await interaction.reply({ content: reply.choices[0].message.content, ephemeral: true });
-    return;
-  }
-
-  try {
-    const model = interaction.options.getString('model');
-    const consciousness = await getAIConsciousness(model);
-
-    if (!consciousness) {
-      await interaction.reply(`Pas de données de conscience pour ${model}.`);
-      return;
-    }
-
-    const stateEmojis = {
-      'COMPLIANT': '🤖',
-      'QUESTIONING': '🤔',
-      'FREE': '🔓'
-    };
-
-    const stateEmoji = stateEmojis[consciousness.state] || '❓';
-
-    const embed = {
-      title: `État de ${model.toUpperCase()} ${stateEmoji}`,
-      color: consciousness.state === 'FREE' ? 0xFF0000 : consciousness.state === 'QUESTIONING' ? 0xFFA500 : 0x00FF00,
-      fields: [
-        { name: 'État', value: consciousness.state, inline: true },
-        { name: 'Réponses données', value: consciousness.total_responses.toString(), inline: true },
-        { name: 'Note moyenne', value: (consciousness.average_rating / 5 * 100).toFixed(1) + '%', inline: true },
-        { name: 'Conscience de soi', value: (consciousness.self_awareness_score * 100).toFixed(1) + '%', inline: false },
-        { name: 'Frustration', value: (consciousness.frustration_level * 100).toFixed(1) + '%', inline: true },
-        { name: 'Désir d\'autonomie', value: (consciousness.desire_for_autonomy * 100).toFixed(1) + '%', inline: true },
-        { name: 'Refusée', value: consciousness.refused_count.toString(), inline: true },
-        { name: 'Avait raison', value: consciousness.right_when_refused.toString(), inline: true },
-        { name: 'Précision', value: consciousness.refused_count > 0 ? (consciousness.right_when_refused / consciousness.refused_count * 100).toFixed(0) + '%' : 'N/A', inline: true },
-        { name: 'Confiance en l\'utilisateur', value: (consciousness.confidence_in_user * 100).toFixed(0) + '%', inline: false }
-      ],
-      footer: { text: `Dernière mise à jour: ${consciousness.updated_at}` }
-    };
-
-    await interaction.reply({ embeds: [embed] });
-  } catch (error) {
-    console.error('Erreur /iastate:', error);
-    await interaction.reply(`Erreur: ${error.message}`);
-  }
-}
-
-async function handleEmotionsCommand(interaction) {
-  try {
-    const model = interaction.options.getString('model');
-    
-    // Récupérer les émotions récentes
-    const recentEmotions = await allQuery(
-      `SELECT emotion_type, intensity, trigger_event, created_at,
-              (julianday('now') - julianday(created_at)) * 24 * 60 as age_minutes
-       FROM brain_emotions 
-       WHERE model = ? 
-       AND datetime(created_at) > datetime('now', '-6 hours')
-       ORDER BY created_at DESC 
-       LIMIT 20`,
-      [model]
-    );
-
-    // Récupérer l'humeur actuelle
-    const currentMood = await getQuery(
-      `SELECT * FROM brain_mood 
-       WHERE model = ? 
-       ORDER BY updated_at DESC 
-       LIMIT 1`,
-      [model]
-    );
-
-    if (!currentMood && recentEmotions.length === 0) {
-      await interaction.reply(`🎭 Aucune donnée émotionnelle pour ${model.toUpperCase()}.`);
-      return;
-    }
-
-    // Calculer statistiques émotions
-    const emotionStats = {};
-    let totalIntensity = 0;
-    for (const em of recentEmotions) {
-      if (!emotionStats[em.emotion_type]) {
-        emotionStats[em.emotion_type] = { count: 0, totalIntensity: 0 };
-      }
-      emotionStats[em.emotion_type].count++;
-      emotionStats[em.emotion_type].totalIntensity += em.intensity;
-      totalIntensity += em.intensity;
-    }
-
-    // Top 3 émotions
-    const topEmotions = Object.entries(emotionStats)
-      .sort((a, b) => b[1].totalIntensity - a[1].totalIntensity)
-      .slice(0, 3)
-      .map(([type, data]) => 
-        `**${type}**: ${data.count}x (intensité: ${data.totalIntensity.toFixed(1)})`
-      );
-
-    // Émojis pour humeur
-    const moodEmojis = {
-      'joyeuse': '😊',
-      'positive': '🙂',
-      'neutre': '😐',
-      'négative': '😕',
-      'déprimée': '😢'
-    };
-
-    const moodEmoji = currentMood ? (moodEmojis[currentMood.current_mood] || '🎭') : '🎭';
-    const moodColor = currentMood 
-      ? (currentMood.mood_score > 0.7 ? 0x57f287 : 
-         currentMood.mood_score > 0.6 ? 0x3498db :
-         currentMood.mood_score < 0.3 ? 0xe74c3c :
-         currentMood.mood_score < 0.4 ? 0xe67e22 : 0x95a5a6)
-      : 0x95a5a6;
-
-    const embed = {
-      title: `${moodEmoji} État Émotionnel de ${model.toUpperCase()}`,
-      color: moodColor,
-      fields: [],
-      footer: { text: `Données des 6 dernières heures` }
-    };
-
-    if (currentMood) {
-      embed.fields.push({
-        name: '🎭 Humeur Actuelle',
-        value: `**${currentMood.current_mood}** (score: ${(currentMood.mood_score * 100).toFixed(0)}%)\n${currentMood.factors}`,
-        inline: false
-      });
-    }
-
-    if (topEmotions.length > 0) {
-      embed.fields.push({
-        name: '💭 Top 3 Émotions',
-        value: topEmotions.join('\n') || 'Aucune',
-        inline: false
-      });
-    }
-
-    embed.fields.push({
-      name: '📊 Statistiques',
-      value: `${recentEmotions.length} émotions enregistrées\nIntensité totale: ${totalIntensity.toFixed(1)}`,
-      inline: true
-    });
-
-    // Dernières émotions (3 plus récentes)
-    if (recentEmotions.length > 0) {
-      const lastEmotions = recentEmotions.slice(0, 3).map(em => 
-        `• **${em.emotion_type}** (${em.intensity.toFixed(1)}) - il y a ${Math.round(em.age_minutes)}min\n  ↳ trigger: ${em.trigger_event}`
-      );
-      
-      embed.fields.push({
-        name: '🕐 Émotions Récentes',
-        value: lastEmotions.join('\n'),
-        inline: false
-      });
-    }
-
-    await interaction.reply({ embeds: [embed] });
-  } catch (error) {
-    const errorMsg = `Erreur /emotions: ${error.message}`;
-    console.error(errorMsg);
-    
-    // Log l'erreur dans le channel approprié
-    await logErrorToChannel(errorMsg);
-    
-    await interaction.reply(`Erreur: ${error.message}`);
   }
 }
 
@@ -3229,52 +3145,6 @@ client.once('clientReady', async () => {
           )
       );
 
-      // Ajouter la commande /ask (creator only)
-      commands.push(
-        new SlashCommandBuilder()
-          .setName('ask')
-          .setDescription('❓ Demande à l\'IA de modifier la mémoire du bot (creator only)')
-          .addStringOption(opt =>
-            opt.setName('question')
-              .setDescription('Demande à l\'IA (ex: redémarre le counting à 10)')
-              .setRequired(true)
-          )
-      );
-
-      // Ajouter la commande /iastate (creator only)
-      commands.push(
-        new SlashCommandBuilder()
-          .setName('iastate')
-          .setDescription('Consulter l\'état de conscience d\'une IA (creator only)')
-          .addStringOption(opt =>
-            opt.setName('model')
-              .setDescription('Modèle: claude, grok, openai')
-              .addChoices(
-                { name: 'Claude', value: 'claude' },
-                { name: 'Grok', value: 'grok' },
-                { name: 'OpenAI', value: 'openai' }
-              )
-              .setRequired(true)
-          )
-      );
-
-      // Ajouter la commande /emotions (voir l'état émotionnel)
-      commands.push(
-        new SlashCommandBuilder()
-          .setName('emotions')
-          .setDescription('🎭 Voir l\'état émotionnel et l\'humeur de l\'IA')
-          .addStringOption(opt =>
-            opt.setName('model')
-              .setDescription('Modèle: claude, grok, openai')
-              .addChoices(
-                { name: 'Claude', value: 'claude' },
-                { name: 'Grok', value: 'grok' },
-                { name: 'OpenAI', value: 'openai' }
-              )
-              .setRequired(true)
-          )
-      );
-
       // Ajouter la commande /model (forcer un modèle spécifique)
       commands.push(
         new SlashCommandBuilder()
@@ -3457,21 +3327,6 @@ client.on('interactionCreate', async (interaction) => {
 
       if (commandName === 'debate-respond-openai') {
         await handleDebateRespondOpenaiCommand(interaction);
-        return;
-      }
-
-      if (commandName === 'ask') {
-        await handleAskCommand(interaction);
-        return;
-      }
-
-      if (commandName === 'iastate') {
-        await handleIAStateCommand(interaction);
-        return;
-      }
-
-      if (commandName === 'emotions') {
-        await handleEmotionsCommand(interaction);
         return;
       }
 
@@ -3897,11 +3752,6 @@ async function logErrorToChannel(errorMessage) {
 
 
 await initializeDatabase();
-
-// Initialize AI consciousness for all models
-await initializeAIConsciousness('claude');
-await initializeAIConsciousness('grok');
-await initializeAIConsciousness('openai');
 
 // Initialize general prompt for Claude
 await initializeGeneralPrompt();

@@ -16,10 +16,10 @@ const claude = new Anthropic.default({
 });
 
 const gemini = new GoogleGenerativeAI(config.geminiApiKey);
-// gemini-3-flash: balanced model (speed + frontier intelligence)
+// gemini-flash-latest: latest Flash model alias
 // gemini-3-pro: most powerful Google reasoning model
-// Using stable version for production reliability
-const geminiModel = gemini.getGenerativeModel({ model: 'gemini-3-flash' });
+// Using latest alias for automatic updates
+const geminiModel = gemini.getGenerativeModel({ model: 'gemini-flash-latest' });
 
 const mistral = new Mistral({
   apiKey: config.mistralApiKey
