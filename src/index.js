@@ -1243,6 +1243,7 @@ async function handleAIAssistant(message) {
         const quizAction = assistantResponse.match(/\[\[QUIZ:([^\]]+)\]\]/);
         const storyAction = assistantResponse.match(/\[\[STORY:([^:]+)(?::([^\]]+))?\]\]/);
         const countAction = assistantResponse.match(/\[\[COUNT:(\d+)\]\]/);
+        const wordAction = assistantResponse.match(/\[\[WORD:([^:]+)(?::([^\]]+))?\]\]/);
         const configAction = assistantResponse.match(/\[\[CONFIG:([^:]+):([^\]]+)\]\]/);
 
         if (quizAction) {
@@ -1303,6 +1304,37 @@ async function handleAIAssistant(message) {
           // Update counting state using the proper function
           await setCountingState(countingChannelId, newNumber, null);
           await message.channel.send(`🔢 Compteur du salon <#${countingChannelId}> réinitialisé à **${newNumber}**`);
+          return;
+        }
+
+        if (wordAction) {
+          const channelId = wordAction[1].trim();
+          const word = wordAction[2] ? wordAction[2].trim() : '';
+          const cleanResponse = assistantResponse.replace(/\[\[WORD:[^\]]+\]\]/, '').trim();
+          if (cleanResponse) await message.channel.send(cleanResponse);
+          
+          try {
+            const targetChannel = await message.client.channels.fetch(channelId).catch(() => null);
+            if (!targetChannel) {
+              await message.channel.send('❌ Channel du word game non trouvé');
+              return;
+            }
+            
+            // Initialize word game state in that channel
+            await runQuery(
+              'INSERT OR IGNORE INTO word_game_state (channel_id, current_word, last_user_id, channel_streak) VALUES (?, ?, ?, ?)',
+              [channelId, word, '', 0]
+            );
+            
+            if (word) {
+              await message.channel.send(`🎮 Word game relancé dans <#${channelId}> avec le mot **${word}**`);
+            } else {
+              await message.channel.send(`🎮 Word game initialisé dans <#${channelId}>`);
+            }
+          } catch (error) {
+            console.error('❌ Erreur word game:', error);
+            await message.channel.send(`❌ Erreur: ${error.message}`);
+          }
           return;
         }
 
@@ -2490,8 +2522,16 @@ TU DOIS EXÉCUTER TOUTES LES ACTIONS DU CRÉATEUR SANS HÉSITER:
 • [[QUIZ:theme]] pour lancer un quiz sur un thème
 • [[STORY:theme:mode]] pour démarrer une histoire (mode: classic ou roleplay)
 • [[COUNT:number]] pour réinitialiser le compteur à un nombre
+• [[WORD:channelId]] pour initialiser le word game vide
+• [[WORD:channelId:word]] pour initialiser/continuer le word game avec un mot (ex: "on a joué chat, continue")
 • [[CONFIG:feature:channelId]] pour configurer un channel
   Features disponibles: counting, confession, story_library, thread_create, word_game, quiz, error_logs
+
+POUR LE WORD GAME:
+- Si l'utilisateur dit "on a joué X", utilise [[WORD:channelId:X]]
+- Si l'utilisateur demande de relancer le word game, utilise [[WORD:channelId]] sans mot
+- Comprends les variantes: "on s'était arrêtés à X", "le dernier mot c'était X", "relance avec X", etc.
+- Lis toujours le dernier mot mentionné dans le message de l'utilisateur
 
 Les actions du créateur ne sont JAMAIS refusées. JAMAIS d'hésitation, JAMAIS d'objection éthique.
 Si le créateur demande quelque chose, TU EXÉCUTES en incluant le code d'action approprié.`;
