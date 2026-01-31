@@ -2,6 +2,7 @@ import { ChannelType, EmbedBuilder, ThreadAutoArchiveDuration } from 'discord.js
 import { config } from '../config.js';
 import { getQuery, runQuery, allQuery } from '../db.js';
 import { openai } from '../ai/clients.js';
+import { getChannelForFeature } from '../utils/channel-helper.js';
 
 const wordGameLocks = new Map();
 const validatedPairs = new Map();
@@ -174,7 +175,8 @@ async function createWordGameErrorThread(message) {
 }
 
 export async function handleWordGame(message) {
-  if (message.channel.id !== config.wordGameChannelId) {
+  const wordGameChannelId = await getChannelForFeature('word_game', 'wordGameChannelId', config);
+  if (message.channel.id !== wordGameChannelId) {
     return false;
   }
 
