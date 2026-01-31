@@ -1,13 +1,16 @@
 import { EmbedBuilder } from 'discord.js';
 import { config } from '../config.js';
 import { getQuery, runQuery } from '../db.js';
+import { getChannelForFeature } from '../utils/channel-helper.js';
 
 function isAdmin(user) {
   return Array.isArray(config.adminUserIds) && config.adminUserIds.includes(user.id);
 }
 
 export async function handleConfession(message) {
-  if (message.channel.id !== config.confessionChannelId) {
+  const confessionChannelId = await getChannelForFeature('confession', 'confessionChannelId', config);
+  
+  if (!confessionChannelId || message.channel.id !== confessionChannelId) {
     return false;
   }
 

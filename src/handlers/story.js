@@ -1,6 +1,7 @@
 import { ChannelType, EmbedBuilder } from 'discord.js';
 import { grok } from '../ai/clients.js';
-import { runQuery } from '../db.js';
+import { runQuery, getQuery } from '../db.js';
+import { getChannelForFeature } from '../utils/channel-helper.js';
 
 const activeStories = new Map();
 
@@ -61,9 +62,11 @@ Rends ça DRAMATIQUE, ABSURDE et HILARANT! Ajoute des didascalies avec des actio
     .setTimestamp();
 
   // Envoyer dans le salon bibliothèque
-  if (config.storyLibraryChannelId) {
+  const storyLibraryChannelId = await getChannelForFeature('story_library', 'storyLibraryChannelId', config);
+  
+  if (storyLibraryChannelId) {
     try {
-      const libraryChannel = await client.channels.fetch(config.storyLibraryChannelId);
+      const libraryChannel = await client.channels.fetch(storyLibraryChannelId);
       if (libraryChannel) {
         await libraryChannel.send({ embeds: [endEmbed] });
       }

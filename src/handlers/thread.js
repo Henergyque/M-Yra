@@ -1,5 +1,6 @@
 import { ChannelType, EmbedBuilder, ThreadAutoArchiveDuration } from 'discord.js';
 import { config } from '../config.js';
+import { getChannelsForFeature } from '../utils/channel-helper.js';
 
 function formatThreadName(message) {
   const base = message.content?.trim() || message.author.username;
@@ -7,12 +8,10 @@ function formatThreadName(message) {
   return `Discussion - ${safe}`;
 }
 
-function isConfiguredChannel(channelId, list) {
-  return Array.isArray(list) && list.includes(channelId);
-}
-
 export async function handleThreadCreation(message) {
-  if (!isConfiguredChannel(message.channel.id, config.threadChannelIds)) {
+  const threadChannelIds = await getChannelsForFeature('thread_create', 'threadChannelIds', config);
+  
+  if (!threadChannelIds.includes(message.channel.id)) {
     return;
   }
   if (!message.guild || message.channel.type !== ChannelType.GuildText) {
