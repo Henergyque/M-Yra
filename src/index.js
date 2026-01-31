@@ -3120,6 +3120,58 @@ client.once('ready', async () => {
           )
       );
 
+      // Ajouter la commande /config (gérer les channels des features)
+      commands.push(
+        new SlashCommandBuilder()
+          .setName('config')
+          .setDescription('⚙️ Configurer les channels pour chaque fonctionnalité (creator only)')
+          .addSubcommand(sub =>
+            sub.setName('list')
+              .setDescription('Lister tous les channels configurés')
+          )
+          .addSubcommand(sub =>
+            sub.setName('set')
+              .setDescription('Assigner un channel à une fonctionnalité')
+              .addStringOption(opt =>
+                opt.setName('feature')
+                  .setDescription('Fonctionnalité à configurer')
+                  .addChoices(
+                    { name: 'Counting', value: 'counting' },
+                    { name: 'Confession', value: 'confession' },
+                    { name: 'Story Library', value: 'story_library' },
+                    { name: 'Thread Auto-Create', value: 'thread_create' },
+                    { name: 'Word Game', value: 'word_game' },
+                    { name: 'Quiz', value: 'quiz' },
+                    { name: 'Error Logs', value: 'error_logs' }
+                  )
+                  .setRequired(true)
+              )
+              .addChannelOption(opt =>
+                opt.setName('channel')
+                  .setDescription('Channel à utiliser')
+                  .setRequired(true)
+              )
+          )
+          .addSubcommand(sub =>
+            sub.setName('remove')
+              .setDescription('Supprimer la configuration d\'une fonctionnalité')
+              .addStringOption(opt =>
+                opt.setName('feature')
+                  .setDescription('Fonctionnalité à supprimer')
+                  .addChoices(
+                    { name: 'Counting', value: 'counting' },
+                    { name: 'Confession', value: 'confession' },
+                    { name: 'Story Library', value: 'story_library' },
+                    { name: 'Thread Auto-Create', value: 'thread_create' },
+                    { name: 'Word Game', value: 'word_game' },
+                    { name: 'Quiz', value: 'quiz' },
+                    { name: 'Error Logs', value: 'error_logs' }
+                  )
+                  .setRequired(true)
+              )
+          )
+      );
+
       await guild.commands.set(commands);
       console.log('✅ Slash commands enregistrées');
     }
@@ -3186,6 +3238,71 @@ client.on('interactionCreate', async (interaction) => {
 
       if (commandName === 'model') {
         await handleModelCommand(interaction);
+        return;
+      }
+
+      if (commandName === 'config') {
+        // Only allow creator
+        if (interaction.user.id !== config.creatorId) {
+          await interaction.reply({ content: '❌ Seul le créateur peut configurer les channels.', ephemeral: true });
+          return;
+        }
+
+        const subcommand = options.getSubcommand();
+
+        if (subcommand === 'list') {
+          // Afficher tous les channels configurés
+          const configuredFeatures = await allQuery('SELECT feature, channel_id, enabled, updated_at FROM channel_config ORDER BY feature');
+          
+          if (configuredFeatures.length === 0) {
+            await interaction.reply({ content: '📭 Aucune configuration trouvée.', ephemeral: true });
+            return;
+          }
+
+          let list = '⚙️ **Configurations actuelles:**\n';
+          for (const feat of configuredFeatures) {
+            const channel = await client.channels.fetch(feat.channel_id).catch(() => null);
+            const channelName = channel ? `<#${feat.channel_id}>` : `*deleted*`;
+            const status = feat.enabled ? '✅' : '❌';
+            list += `${status} **${feat.feature}**: ${channelName} (${new Date(feat.updated_at).toLocaleDateString('fr-FR')})\n`;
+          }
+
+          await interaction.reply({ content: list, ephemeral: true });
+        } else if (subcommand === 'set') {
+          const feature = options.getString('feature');
+          const channel = options.getChannel('channel');
+
+          if (!channel) {
+            await interaction.reply({ content: '❌ Channel introuvable.', ephemeral: true });
+            return;
+          }
+
+          const now = new Date().toISOString();
+          await runQuery(
+            'INSERT INTO channel_config (feature, channel_id, enabled, created_at, updated_at) VALUES (?, ?, 1, ?, ?) ON CONFLICT(feature) DO UPDATE SET channel_id = ?, enabled = 1, updated_at = ?',
+            [feature, channel.id, now, now, channel.id, now]
+          );
+
+          await interaction.reply({
+            content: `✅ **${feature}** configuré → <#${channel.id}>`,
+            ephemeral: true
+          });
+        } else if (subcommand === 'remove') {
+          const feature = options.getString('feature');
+
+          const config_row = await getQuery('SELECT * FROM channel_config WHERE feature = ?', [feature]);
+          if (!config_row) {
+            await interaction.reply({ content: `❌ **${feature}** n'est pas configurée.`, ephemeral: true });
+            return;
+          }
+
+          await runQuery('DELETE FROM channel_config WHERE feature = ?', [feature]);
+
+          await interaction.reply({
+            content: `🗑️ **${feature}** a été supprimée.`,
+            ephemeral: true
+          });
+        }
         return;
       }
 

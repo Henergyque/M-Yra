@@ -406,6 +406,17 @@ async function initializeDatabase() {
     )
   `);
 
+  // Channel configuration (which feature goes to which channel)
+  await runQuery(`
+    CREATE TABLE IF NOT EXISTS channel_config (
+      feature TEXT PRIMARY KEY,
+      channel_id TEXT NOT NULL,
+      enabled INTEGER DEFAULT 1,
+      created_at TEXT,
+      updated_at TEXT
+    )
+  `);
+
   // Indexes pour performance ultra-rapide
   await runQuery(`CREATE INDEX IF NOT EXISTS idx_observations_model ON brain_observations(model, created_at DESC)`);
   await runQuery(`CREATE INDEX IF NOT EXISTS idx_patterns_model_user ON brain_member_patterns(model, user_id)`);
