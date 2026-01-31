@@ -251,7 +251,7 @@ Respond with JSON only, no other text.`;
    */
   routeByExplicitType(type) {
     const routes = {
-      'word-game': { model: 'mistral', urgency: 'high', reason: 'WORD_GAME', fallback: ['sonnet'] },
+      'word-game': { model: 'opus', urgency: 'high', reason: 'WORD_GAME', fallback: ['mistral', 'gemini'] },
       'counting': { model: 'mistral', urgency: 'normal', reason: 'COUNTING', fallback: ['sonnet'] },
       'quiz': { model: 'gemini', urgency: 'normal', reason: 'QUIZ', fallback: ['sonnet', 'mistral'] },
       'story': { model: 'sonnet', urgency: 'normal', reason: 'STORY', fallback: ['opus'] },
