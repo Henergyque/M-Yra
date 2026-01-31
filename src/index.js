@@ -48,6 +48,14 @@ import { handleStoryContribution, finishStory, getActiveStories, setActiveStory,
 import { handleActionVeriteCommand, getActionVeriteGames, getActionVeriteLocks, createActionVeriteRow } from './handlers/action-verite.js';
 import { handleQuizCommand, getActiveQuiz } from './handlers/quiz.js';
 
+process.on('unhandledRejection', (reason) => {
+  console.error('❌ Unhandled rejection:', reason);
+});
+
+process.on('uncaughtException', (error) => {
+  console.error('❌ Uncaught exception:', error);
+});
+
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
@@ -3506,7 +3514,11 @@ await initializeDatabase();
 // Initialize general prompt for Claude
 await initializeGeneralPrompt();
 
-client.login(config.token);
+console.log('🚀 Starting bot...');
+client.login(config.token).catch((error) => {
+  console.error('❌ Discord login failed:', error);
+  process.exit(1);
+});
 
 
 
