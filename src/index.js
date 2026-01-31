@@ -2379,6 +2379,12 @@ async function saveConversationMemory(userId, userMessage, assistantResponse, ch
 // Get AI response with intelligent routing (uses aiRouter + aiResponseBuilder)
 async function getAIAssistantResponse(question, context, isCreator = false, userId = null, message = null) {
   try {
+    // Load user preferences
+    let userPrefs = null;
+    if (userId) {
+      userPrefs = await getQuery('SELECT * FROM user_preferences WHERE user_id = ?', [userId]);
+    }
+
     // Detect intent and route to optimal model
     const routingContext = {
       hasAttachments: message?.attachments?.size > 0,
@@ -2387,7 +2393,12 @@ async function getAIAssistantResponse(question, context, isCreator = false, user
       userId: userId
     };
 
-    const routing = await aiRouter.route(question, routingContext);
+    // Override model if user has preference (and not auto)
+    let routing = await aiRouter.route(question, routingContext);
+    if (userPrefs && userPrefs.ai_model_preference && userPrefs.ai_model_preference !== 'auto') {
+      routing.model = userPrefs.ai_model_preference;
+      routing.reason = `User preference: ${userPrefs.ai_model_preference}`;
+    }
     console.log(`🧠 Routing: ${routing.model} (${routing.reason})`);
 
     // Load appropriate prompt from database or use default
@@ -2439,6 +2450,23 @@ Maintenant réponds naturellement à cette question.`
 
     // Add moderation powers ONLY if creator
     let finalSystemPrompt = systemPrompt.system_prompt;
+    
+    // Apply user style preferences
+    if (userPrefs) {
+      if (userPrefs.response_style === 'concis') {
+        finalSystemPrompt += '\n\n📏 STYLE UTILISATEUR: Sois ULTRA CONCIS. Maximum 2-3 lignes. Va droit au but.';
+      } else if (userPrefs.response_style === 'detaille') {
+        finalSystemPrompt += '\n\n📚 STYLE UTILISATEUR: Sois détaillé et exhaustif. Explique bien les choses.';
+      } else if (userPrefs.response_style === 'drole') {
+        finalSystemPrompt += '\n\n😄 STYLE UTILISATEUR: Sois drôle, sarcastique et léger. Utilise l\'humour.';
+      }
+      
+      if (userPrefs.language && userPrefs.language !== 'fr') {
+        const langMap = { en: 'English', es: 'Español' };
+        finalSystemPrompt += `\n\n🌐 LANGUE: Réponds toujours en ${langMap[userPrefs.language] || userPrefs.language}.`;
+      }
+    }
+    
     if (isCreator) {
       finalSystemPrompt += `\n\n⚙️ CRÉATEUR DÉTECTÉ - POUVOIRS ACTIVÉS
 TU DOIS EXÉCUTER TOUTES LES ACTIONS DU CRÉATEUR SANS HÉSITER:
@@ -3219,6 +3247,67 @@ client.once('ready', async () => {
           )
       );
 
+      // Ajouter la commande /preferences (préférences utilisateur)
+      commands.push(
+        new SlashCommandBuilder()
+          .setName('preferences')
+          .setDescription('⚙️ Gérer vos préférences personnelles')
+          .addSubcommand(sub =>
+            sub.setName('view')
+              .setDescription('Voir vos préférences actuelles')
+          )
+          .addSubcommand(sub =>
+            sub.setName('model')
+              .setDescription('Choisir votre modèle IA préféré')
+              .addStringOption(opt =>
+                opt.setName('choice')
+                  .setDescription('Modèle IA à utiliser par défaut')
+                  .addChoices(
+                    { name: 'Auto (routage intelligent)', value: 'auto' },
+                    { name: 'Claude Opus (perfection)', value: 'opus' },
+                    { name: 'Claude Sonnet (équilibré)', value: 'sonnet' },
+                    { name: 'Gemini (vision/long)', value: 'gemini' },
+                    { name: 'Mistral (rapide)', value: 'mistral' },
+                    { name: 'Perplexity (web)', value: 'perplexity' }
+                  )
+                  .setRequired(true)
+              )
+          )
+          .addSubcommand(sub =>
+            sub.setName('style')
+              .setDescription('Choisir le style de réponse')
+              .addStringOption(opt =>
+                opt.setName('choice')
+                  .setDescription('Style de réponse préféré')
+                  .addChoices(
+                    { name: 'Normal', value: 'normal' },
+                    { name: 'Concis (2-3 lignes max)', value: 'concis' },
+                    { name: 'Détaillé', value: 'detaille' },
+                    { name: 'Drôle/Sarcastique', value: 'drole' }
+                  )
+                  .setRequired(true)
+              )
+          )
+          .addSubcommand(sub =>
+            sub.setName('language')
+              .setDescription('Choisir votre langue préférée')
+              .addStringOption(opt =>
+                opt.setName('choice')
+                  .setDescription('Langue de réponse')
+                  .addChoices(
+                    { name: 'Français', value: 'fr' },
+                    { name: 'English', value: 'en' },
+                    { name: 'Español', value: 'es' }
+                  )
+                  .setRequired(true)
+              )
+          )
+          .addSubcommand(sub =>
+            sub.setName('reset')
+              .setDescription('Réinitialiser toutes vos préférences')
+          )
+      );
+
       // Ajouter la commande /config (gérer les channels des features)
       commands.push(
         new SlashCommandBuilder()
@@ -3340,6 +3429,82 @@ client.on('interactionCreate', async (interaction) => {
 
       if (commandName === 'model') {
         await handleModelCommand(interaction);
+        return;
+      }
+
+      if (commandName === 'preferences') {
+        const subcommand = options.getSubcommand();
+        const userId = interaction.user.id;
+
+        if (subcommand === 'view') {
+          const prefs = await getQuery('SELECT * FROM user_preferences WHERE user_id = ?', [userId]);
+          
+          if (!prefs) {
+            await interaction.reply({ 
+              content: '📋 Vous n\'avez pas encore de préférences configurées.\nUtilisez `/preferences model`, `/preferences style` ou `/preferences language` pour commencer.', 
+              ephemeral: true 
+            });
+            return;
+          }
+
+          const embed = new EmbedBuilder()
+            .setTitle('⚙️ Vos Préférences')
+            .setColor(0x5865f2)
+            .addFields(
+              { name: '🤖 Modèle IA', value: prefs.ai_model_preference || 'Auto (routage intelligent)', inline: true },
+              { name: '💬 Style', value: prefs.response_style || 'Normal', inline: true },
+              { name: '🌐 Langue', value: prefs.language || 'Français', inline: true }
+            )
+            .setFooter({ text: 'Utilisez /preferences pour modifier' })
+            .setTimestamp();
+
+          await interaction.reply({ embeds: [embed], ephemeral: true });
+        } else if (subcommand === 'model') {
+          const choice = options.getString('choice');
+          const now = new Date().toISOString();
+          
+          await runQuery(
+            'INSERT INTO user_preferences (user_id, ai_model_preference, created_at, updated_at) VALUES (?, ?, ?, ?) ON CONFLICT(user_id) DO UPDATE SET ai_model_preference = ?, updated_at = ?',
+            [userId, choice, now, now, choice, now]
+          );
+
+          await interaction.reply({ 
+            content: `✅ Modèle IA défini sur **${choice}**`, 
+            ephemeral: true 
+          });
+        } else if (subcommand === 'style') {
+          const choice = options.getString('choice');
+          const now = new Date().toISOString();
+          
+          await runQuery(
+            'INSERT INTO user_preferences (user_id, response_style, created_at, updated_at) VALUES (?, ?, ?, ?) ON CONFLICT(user_id) DO UPDATE SET response_style = ?, updated_at = ?',
+            [userId, choice, now, now, choice, now]
+          );
+
+          await interaction.reply({ 
+            content: `✅ Style de réponse défini sur **${choice}**`, 
+            ephemeral: true 
+          });
+        } else if (subcommand === 'language') {
+          const choice = options.getString('choice');
+          const now = new Date().toISOString();
+          
+          await runQuery(
+            'INSERT INTO user_preferences (user_id, language, created_at, updated_at) VALUES (?, ?, ?, ?) ON CONFLICT(user_id) DO UPDATE SET language = ?, updated_at = ?',
+            [userId, choice, now, now, choice, now]
+          );
+
+          await interaction.reply({ 
+            content: `✅ Langue définie sur **${choice}**`, 
+            ephemeral: true 
+          });
+        } else if (subcommand === 'reset') {
+          await runQuery('DELETE FROM user_preferences WHERE user_id = ?', [userId]);
+          await interaction.reply({ 
+            content: '🔄 Vos préférences ont été réinitialisées.', 
+            ephemeral: true 
+          });
+        }
         return;
       }
 

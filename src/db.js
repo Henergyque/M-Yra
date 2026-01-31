@@ -417,6 +417,21 @@ async function initializeDatabase() {
     )
   `);
 
+  // User preferences (personal settings per user)
+  await runQuery(`
+    CREATE TABLE IF NOT EXISTS user_preferences (
+      user_id TEXT PRIMARY KEY,
+      language TEXT DEFAULT 'fr',
+      ai_model_preference TEXT,
+      response_style TEXT DEFAULT 'normal',
+      notifications INTEGER DEFAULT 1,
+      dm_allowed INTEGER DEFAULT 0,
+      timezone TEXT DEFAULT 'Europe/Paris',
+      created_at TEXT,
+      updated_at TEXT
+    )
+  `);
+
   // Indexes pour performance ultra-rapide
   await runQuery(`CREATE INDEX IF NOT EXISTS idx_observations_model ON brain_observations(model, created_at DESC)`);
   await runQuery(`CREATE INDEX IF NOT EXISTS idx_patterns_model_user ON brain_member_patterns(model, user_id)`);
