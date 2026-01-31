@@ -204,7 +204,7 @@ export class AIResponseBuilder {
           async () => {
             const response = await withTimeout(
               mistral.chat.complete({
-                model: 'mistral-large-latest',
+                model: 'mistral-large-3-25-12',
                 temperature,
                 max_tokens: maxTokens,
                 messages: [

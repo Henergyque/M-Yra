@@ -72,7 +72,7 @@ Consider:
 Respond with JSON only, no other text.`;
 
       const response = await mistral.chat.complete({
-        model: 'mistral-small-latest', // Fast model for intent detection
+        model: 'mistral-small-3-2-25-06', // Fast model for intent detection
         messages: [{ role: 'user', content: prompt }],
         temperature: 0.1, // Low temp for consistent detection
         max_tokens: 150
