@@ -8,17 +8,30 @@ async function addMemory(type, content, createdBy, subject = null, userId = null
   );
 }
 
-async function getMemoriesForUser(userId) {
+async function getMemoriesForUser(userId, limit = 50) {
   return await allQuery(
-    'SELECT * FROM memories WHERE user_id = ? ORDER BY created_at DESC',
-    [userId]
+    "SELECT * FROM memories WHERE user_id = ? AND type NOT IN ('conversation','vanne') ORDER BY created_at DESC LIMIT ?",
+    [userId, limit]
   );
 }
 
-async function searchMemories(keywords) {
+async function searchMemories(keywords, options = {}) {
+  const { userId = null, limit = 100 } = options;
   const terms = keywords.toLowerCase().split(/\s+/).filter(t => t.length > 2);
   if (terms.length === 0) return [];
-  const results = await allQuery('SELECT * FROM memories ORDER BY created_at DESC LIMIT 100');
+
+  let sql = "SELECT * FROM memories WHERE type NOT IN ('conversation','vanne')";
+  const params = [];
+
+  if (userId) {
+    sql += ' AND (user_id = ? OR user_id IS NULL)';
+    params.push(userId);
+  }
+
+  sql += ' ORDER BY created_at DESC LIMIT ?';
+  params.push(limit);
+
+  const results = await allQuery(sql, params);
   return results.filter(mem => {
     const searchText = `${mem.subject || ''} ${mem.content}`.toLowerCase();
     return terms.some(term => searchText.includes(term));
@@ -37,14 +50,54 @@ async function deleteMemory(memoryId) {
 }
 
 // Conversation helpers
-async function loadConversationHistory(userId, limit = 10) {
-  const rows = await allQuery(
-    `SELECT content FROM memories 
-     WHERE user_id = ? AND type = 'conversation' 
-     ORDER BY created_at DESC LIMIT ?`,
-    [userId, limit]
-  );
+async function loadConversationHistory(userId, limit = 10, maxAgeHours = null) {
+  let sql = `SELECT content FROM memories 
+     WHERE user_id = ? AND type = 'conversation'`;
+  const params = [userId];
+
+  if (typeof maxAgeHours === 'number' && maxAgeHours > 0) {
+    const cutoff = new Date(Date.now() - maxAgeHours * 60 * 60 * 1000).toISOString();
+    sql += ' AND created_at >= ?';
+    params.push(cutoff);
+  }
+
+  sql += ' ORDER BY created_at DESC LIMIT ?';
+  params.push(limit);
+
+  const rows = await allQuery(sql, params);
   return rows.reverse();
+}
+
+// Prune old conversation memories to avoid confusion
+async function pruneConversationMemory(userId, options = {}) {
+  const { maxAgeHours = 24, maxPerUser = 80 } = options;
+  if (!userId) return;
+
+  if (typeof maxAgeHours === 'number' && maxAgeHours > 0) {
+    const cutoff = new Date(Date.now() - maxAgeHours * 60 * 60 * 1000).toISOString();
+    await runQuery(
+      `DELETE FROM memories
+       WHERE type = 'conversation'
+       AND user_id = ?
+       AND created_at < ?`,
+      [userId, cutoff]
+    );
+  }
+
+  if (typeof maxPerUser === 'number' && maxPerUser > 0) {
+    await runQuery(
+      `DELETE FROM memories
+       WHERE type = 'conversation'
+       AND user_id = ?
+       AND id NOT IN (
+         SELECT id FROM memories
+         WHERE type = 'conversation' AND user_id = ?
+         ORDER BY created_at DESC
+         LIMIT ?
+       )`,
+      [userId, userId, maxPerUser]
+    );
+  }
 }
 
 async function loadVannesContext(userId, limit = 5) {
@@ -135,6 +188,7 @@ export {
   getAllMemories,
   deleteMemory,
   loadConversationHistory,
+  pruneConversationMemory,
   loadVannesContext,
   addFact,
   addSummary,

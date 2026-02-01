@@ -33,7 +33,8 @@ import {
   addRawObservation,
   setKnownMember,
   removeKnownMember,
-  listKnownMembers
+  listKnownMembers,
+  pruneConversationMemory
 } from './brain/memory.js';
 import { openai, grok, claude, geminiModel, mistral, perplexity } from './ai/clients.js';
 import { aiRouter } from './ai/router.js';
@@ -1183,14 +1184,14 @@ async function handleAIAssistant(message) {
     let memoryContext = '';
     
     // 1. Get memories about the current user
-    const userMemories = await getMemoriesForUser(message.author.id);
+    const userMemories = await getMemoriesForUser(message.author.id, 30);
     if (userMemories.length > 0) {
       memoryContext += `\n\nInfos sur ${message.author.username}:\n` + 
         userMemories.slice(0, 3).map(m => `- ${m.content}`).join('\n');
     }
     
     // 2. Search memories related to question keywords
-    const keywordMemories = await searchMemories(userQuestion);
+    const keywordMemories = await searchMemories(userQuestion, { userId: message.author.id, limit: 100 });
     if (keywordMemories.length > 0) {
       memoryContext += `\n\nInfos pertinentes:\n` + 
         keywordMemories.slice(0, 3).map(m => `- ${m.content}`).join('\n');
@@ -2293,6 +2294,9 @@ async function saveConversationMemory(userId, userMessage, assistantResponse, ch
         ['vanne', 'joke', userId, vanneContent, timestamp, userId]
       );
     }
+
+    // Prune old conversation memories to avoid confusion
+    await pruneConversationMemory(userId, { maxAgeHours: 6, maxPerUser: 50 });
   } catch (error) {
     console.error('❌ Erreur sauvegarde mémoire:', error);
   }
