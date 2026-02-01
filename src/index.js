@@ -1652,7 +1652,7 @@ async function handleAIAssistant(message) {
           if (cleanResponse) await message.channel.send(cleanResponse);
 
           await setKnownMember(discordId, realName, message.author.id);
-          await message.channel.send(`🧠 Membre connu mis à jour (<@${discordId}>).`);
+          // Silent confirmation
           return;
         }
 
