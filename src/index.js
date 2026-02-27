@@ -45,6 +45,7 @@ import { handleSupportCommand } from './handlers/support.js';
 import { handleWordGame, handleWordStats } from './handlers/word-game.js';
 import { handleThreadCreation } from './handlers/thread.js';
 import { getChannelForFeature } from './utils/channel-helper.js';
+import { getMaintenanceState, setMaintenanceState } from './utils/maintenance.js';
 import { handleStoryContribution, finishStory, getActiveStories, setActiveStory, deleteActiveStory } from './handlers/story.js';
 import { handleActionVeriteCommand, getActionVeriteGames, getActionVeriteLocks, createActionVeriteRow } from './handlers/action-verite.js';
 import { handleQuizCommand, getActiveQuiz } from './handlers/quiz.js';
@@ -2702,6 +2703,46 @@ async function handleModelCommand(interaction) {
   }
 }
 
+async function handleMaintenanceCommand(interaction) {
+  if (interaction.user.id !== config.creatorId) {
+    await interaction.reply({
+      content: '❌ Seul le créateur peut gérer la maintenance.',
+      ephemeral: true
+    });
+    return;
+  }
+
+  const action = interaction.options.getString('action');
+
+  if (action === 'status') {
+    const state = await getMaintenanceState();
+    await interaction.reply({
+      content: state.enabled
+        ? `🛠️ Maintenance **active**\nMessage actuel: ${state.message}`
+        : '✅ Maintenance **inactive**',
+      ephemeral: true
+    });
+    return;
+  }
+
+  if (action === 'on') {
+    const customMessage = interaction.options.getString('message');
+    await setMaintenanceState(true, customMessage);
+    const state = await getMaintenanceState();
+    await interaction.reply({
+      content: `🛠️ Maintenance activée.\nMessage de blocage: ${state.message}`,
+      ephemeral: true
+    });
+    return;
+  }
+
+  await setMaintenanceState(false);
+  await interaction.reply({
+    content: '✅ Maintenance désactivée. Les jeux sont de nouveau disponibles.',
+    ephemeral: true
+  });
+}
+
 client.on('messageCreate', async (message) => {
   if (message.author.bot) {
     return;
@@ -3042,6 +3083,29 @@ client.once('clientReady', async () => {
           )
       );
 
+      // Ajouter la commande /maintenance (activer/désactiver blocage jeux)
+      commands.push(
+        new SlashCommandBuilder()
+          .setName('maintenance')
+          .setDescription('🛠️ Activer ou désactiver la maintenance des jeux')
+          .addStringOption(opt =>
+            opt.setName('action')
+              .setDescription('Action de maintenance')
+              .addChoices(
+                { name: 'Activer', value: 'on' },
+                { name: 'Désactiver', value: 'off' },
+                { name: 'Statut', value: 'status' }
+              )
+              .setRequired(true)
+          )
+          .addStringOption(opt =>
+            opt.setName('message')
+              .setDescription('Message provisoire (optionnel, utilisé avec action=on)')
+              .setRequired(false)
+              .setMaxLength(500)
+          )
+      );
+
     // Register commands globally (available on all servers)
     // Note: Global commands take ~1 hour to propagate
     await client.application.commands.set(commands);
@@ -3235,6 +3299,11 @@ client.on('interactionCreate', async (interaction) => {
             ephemeral: true
           });
         }
+        return;
+      }
+
+      if (commandName === 'maintenance') {
+        await handleMaintenanceCommand(interaction);
         return;
       }
 

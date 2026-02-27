@@ -3,6 +3,7 @@ import { config } from '../config.js';
 import { getQuery, runQuery, allQuery } from '../db.js';
 import { openai } from '../ai/clients.js';
 import { getChannelForFeature } from '../utils/channel-helper.js';
+import { sendMaintenanceNotice } from '../utils/maintenance.js';
 
 const wordGameLocks = new Map();
 const validatedPairs = new Map();
@@ -178,6 +179,11 @@ export async function handleWordGame(message) {
   const wordGameChannelId = await getChannelForFeature('word_game', 'wordGameChannelId', config);
   if (message.channel.id !== wordGameChannelId) {
     return false;
+  }
+
+  const maintenanceBlocked = await sendMaintenanceNotice(message);
+  if (maintenanceBlocked) {
+    return true;
   }
 
   const userWord = message.content.trim().toLowerCase();

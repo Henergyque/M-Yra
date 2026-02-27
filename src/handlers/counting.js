@@ -2,6 +2,7 @@ import { ChannelType, EmbedBuilder, ThreadAutoArchiveDuration } from 'discord.js
 import { config } from '../config.js';
 import { getQuery, runQuery } from '../db.js';
 import { getChannelForFeature } from '../utils/channel-helper.js';
+import { sendMaintenanceNotice } from '../utils/maintenance.js';
 
 const countingLocks = new Map();
 const countingCache = new Map();
@@ -77,6 +78,11 @@ export async function handleCounting(message) {
   
   if (!countingChannelId || message.channel.id !== countingChannelId) {
     return false;
+  }
+
+  const maintenanceBlocked = await sendMaintenanceNotice(message);
+  if (maintenanceBlocked) {
+    return true;
   }
 
   const lock = countingLocks.get(message.channel.id) ?? Promise.resolve();
