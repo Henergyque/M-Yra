@@ -2743,12 +2743,92 @@ async function handleMaintenanceCommand(interaction) {
   });
 }
 
+async function handleParlerCommand(interaction) {
+  if (interaction.user.id !== config.creatorId) {
+    await interaction.reply({
+      content: '❌ Seul le créateur peut utiliser cette commande.',
+      ephemeral: true
+    });
+    return;
+  }
+
+  const text = interaction.options.getString('message', true).trim();
+  const targetChannel = interaction.options.getChannel('channel') || interaction.channel;
+
+  if (!targetChannel?.isTextBased?.()) {
+    await interaction.reply({
+      content: '❌ Le salon cible ne permet pas d\'envoyer des messages.',
+      ephemeral: true
+    });
+    return;
+  }
+
+  await targetChannel.send(text);
+
+  console.log(
+    `🕶️ Parler command used by ${interaction.user.id} in guild ${interaction.guildId} -> channel ${targetChannel.id}`
+  );
+
+  await interaction.reply({
+    content: `✅ Message envoyé dans <#${targetChannel.id}>`,
+    ephemeral: true
+  });
+}
+
+async function handleAnonymousRelayDm(message) {
+  if (message.guild || message.author.id !== config.creatorId) {
+    return false;
+  }
+
+  const trimmed = message.content.trim();
+  if (!trimmed.toLowerCase().startsWith('!parler ')) {
+    return false;
+  }
+
+  const payload = trimmed.slice('!parler '.length).trim();
+  if (!payload) {
+    await message.reply('Format: `!parler <#channel|channelId> <message>`');
+    return true;
+  }
+
+  const mentionMatch = payload.match(/^<#(\d+)>\s+([\s\S]+)$/);
+  const idMatch = payload.match(/^(\d{17,20})\s+([\s\S]+)$/);
+
+  const channelId = mentionMatch?.[1] || idMatch?.[1];
+  const content = (mentionMatch?.[2] || idMatch?.[2] || '').trim();
+
+  if (!channelId || !content) {
+    await message.reply('Format: `!parler <#channel|channelId> <message>`');
+    return true;
+  }
+
+  if (content.length > 1900) {
+    await message.reply('❌ Message trop long (max 1900 caractères).');
+    return true;
+  }
+
+  const targetChannel = await client.channels.fetch(channelId).catch(() => null);
+  if (!targetChannel?.isTextBased?.()) {
+    await message.reply('❌ Salon introuvable ou non textuel.');
+    return true;
+  }
+
+  await targetChannel.send(content);
+  await message.reply(`✅ Message envoyé dans <#${channelId}>`);
+  return true;
+}
+
 client.on('messageCreate', async (message) => {
   if (message.author.bot) {
     return;
   }
 
   if (!message.guild) {
+    const relayed = await handleAnonymousRelayDm(message);
+    if (relayed) {
+      return;
+    }
+
     await handleAdminConfessionLookup(message);
     return;
   }
@@ -3106,6 +3186,24 @@ client.once('clientReady', async () => {
           )
       );
 
+      // Ajouter la commande /parler (envoyer un message via le bot)
+      commands.push(
+        new SlashCommandBuilder()
+          .setName('parler')
+          .setDescription('🕶️ Envoyer un message via M-Yra (creator only)')
+          .addStringOption(opt =>
+            opt.setName('message')
+              .setDescription('Message à envoyer')
+              .setRequired(true)
+              .setMaxLength(1900)
+          )
+          .addChannelOption(opt =>
+            opt.setName('channel')
+              .setDescription('Salon cible (optionnel)')
+              .setRequired(false)
+          )
+      );
+
     // Register commands globally (available on all servers)
     // Note: Global commands take ~1 hour to propagate
     await client.application.commands.set(commands);
@@ -3304,6 +3402,11 @@ client.on('interactionCreate', async (interaction) => {
 
       if (commandName === 'maintenance') {
         await handleMaintenanceCommand(interaction);
+        return;
+      }
+
+      if (commandName === 'parler') {
+        await handleParlerCommand(interaction);
         return;
       }
 
