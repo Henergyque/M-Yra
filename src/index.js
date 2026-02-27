@@ -2818,6 +2818,93 @@ async function handleAnonymousRelayDm(message) {
   return true;
 }
 
+async function handleAutoModSimpleCommand(interaction) {
+  if (!interaction.guild) {
+    await interaction.reply({ content: '❌ Cette commande doit être utilisée dans un serveur.', ephemeral: true });
+    return;
+  }
+
+  if (interaction.user.id !== config.creatorId) {
+    await interaction.reply({ content: '❌ Seul le créateur peut utiliser cette commande.', ephemeral: true });
+    return;
+  }
+
+  const botPerms = interaction.guild.members.me?.permissions;
+  if (!botPerms?.has(PermissionsBitField.Flags.ManageGuild)) {
+    await interaction.reply({
+      content: '❌ Il manque la permission `Manage Server` (MANAGE_GUILD) au bot pour gérer AutoMod.',
+      ephemeral: true
+    });
+    return;
+  }
+
+  const action = interaction.options.getString('action', true);
+  const RULE_NAME = 'M-Yra AutoMod Simple';
+
+  const rules = await interaction.guild.autoModerationRules.fetch();
+  const existingRule = rules.find(rule => rule.name === RULE_NAME);
+
+  if (action === 'status') {
+    if (!existingRule) {
+      await interaction.reply({ content: 'ℹ️ Aucune règle AutoMod simple active.', ephemeral: true });
+      return;
+    }
+
+    const keyword = existingRule.triggerMetadata?.keywordFilter?.[0] || '—';
+    await interaction.reply({
+      content: `✅ Règle active: **${existingRule.name}**\nMot-clé: **${keyword}**\nÉtat: ${existingRule.enabled ? 'activée' : 'désactivée'}`,
+      ephemeral: true
+    });
+    return;
+  }
+
+  if (action === 'off') {
+    if (!existingRule) {
+      await interaction.reply({ content: 'ℹ️ Aucune règle à supprimer.', ephemeral: true });
+      return;
+    }
+
+    await interaction.guild.autoModerationRules.delete(existingRule.id, 'M-Yra AutoMod simple OFF');
+    await interaction.reply({ content: '🗑️ Règle AutoMod simple supprimée.', ephemeral: true });
+    return;
+  }
+
+  const keywordRaw = interaction.options.getString('mot', true).trim();
+  if (!keywordRaw || keywordRaw.length > 60) {
+    await interaction.reply({ content: '❌ Le mot-clé doit contenir entre 1 et 60 caractères.', ephemeral: true });
+    return;
+  }
+
+  if (existingRule) {
+    await interaction.guild.autoModerationRules.delete(existingRule.id, 'M-Yra AutoMod simple refresh');
+  }
+
+  const customMessage = `Message bloqué automatiquement par M-Yra (mot-clé: ${keywordRaw}).`;
+  await interaction.guild.autoModerationRules.create({
+    name: RULE_NAME,
+    eventType: 1,
+    triggerType: 1,
+    triggerMetadata: {
+      keywordFilter: [keywordRaw]
+    },
+    actions: [
+      {
+        type: 1,
+        metadata: {
+          customMessage: customMessage.slice(0, 150)
+        }
+      }
+    ],
+    enabled: true,
+    reason: 'M-Yra AutoMod simple setup'
+  });
+
+  await interaction.reply({
+    content: `🛡️ AutoMod simple activé. Mot-clé bloqué: **${keywordRaw}**`,
+    ephemeral: true
+  });
+}
+
 client.on('messageCreate', async (message) => {
   if (message.author.bot) {
     return;
@@ -3204,6 +3291,29 @@ client.once('clientReady', async () => {
           )
       );
 
+      // Ajouter la commande /automod-simple (règle mot-clé minimale)
+      commands.push(
+        new SlashCommandBuilder()
+          .setName('automod-simple')
+          .setDescription('🛡️ Gérer une règle AutoMod simple (creator only)')
+          .addStringOption(opt =>
+            opt.setName('action')
+              .setDescription('Action à exécuter')
+              .addChoices(
+                { name: 'Activer/Mettre à jour', value: 'setup' },
+                { name: 'Désactiver', value: 'off' },
+                { name: 'Statut', value: 'status' }
+              )
+              .setRequired(true)
+          )
+          .addStringOption(opt =>
+            opt.setName('mot')
+              .setDescription('Mot-clé à bloquer (requis pour setup)')
+              .setRequired(false)
+              .setMaxLength(60)
+          )
+      );
+
     // Register commands globally (available on all servers)
     // Note: Global commands take ~1 hour to propagate
     await client.application.commands.set(commands);
@@ -3407,6 +3517,11 @@ client.on('interactionCreate', async (interaction) => {
 
       if (commandName === 'parler') {
         await handleParlerCommand(interaction);
+        return;
+      }
+
+      if (commandName === 'automod-simple') {
+        await handleAutoModSimpleCommand(interaction);
         return;
       }
 
