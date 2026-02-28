@@ -3,73 +3,81 @@ import { allQuery, runQuery } from '../db.js';
 const args = new Set(process.argv.slice(2));
 const dryRun = args.has('--dry-run') || process.env.DRY_RUN === '1' || process.env.DRY_RUN === 'true';
 
-const RESET_QUERIES = [
-  { label: 'conversation memories', sql: "DELETE FROM memories WHERE type = 'conversation'" },
-  { label: 'joke memories', sql: "DELETE FROM memories WHERE type = 'vanne'" },
-  { label: 'facts', sql: 'DELETE FROM facts' },
-  { label: 'summaries', sql: 'DELETE FROM summaries' },
-  { label: 'attachments', sql: 'DELETE FROM attachments' },
-  { label: 'tasks', sql: 'DELETE FROM tasks' },
-  { label: 'raw observations', sql: 'DELETE FROM raw_observations' },
-  { label: 'known members', sql: 'DELETE FROM known_members' },
-  { label: 'brain observations', sql: 'DELETE FROM brain_observations' },
-  { label: 'brain events', sql: 'DELETE FROM brain_events' },
-  { label: 'brain member patterns', sql: 'DELETE FROM brain_member_patterns' },
-  { label: 'brain context knowledge', sql: 'DELETE FROM brain_context_knowledge' },
-  { label: 'brain relationships', sql: 'DELETE FROM brain_relationships' },
-  { label: 'ai performance', sql: 'DELETE FROM ai_performance' },
-  { label: 'ai decisions', sql: 'DELETE FROM ai_decisions' }
-];
+const PRESERVED_TABLES = new Set([
+  'counters',
+  'word_game_state',
+  'word_game_scores',
+  'word_game_history'
+]);
 
-const COUNT_QUERIES = [
-  { label: 'memories total', sql: 'SELECT COUNT(*) AS c FROM memories' },
-  { label: 'memories conversation', sql: "SELECT COUNT(*) AS c FROM memories WHERE type = 'conversation'" },
-  { label: 'memories vanne', sql: "SELECT COUNT(*) AS c FROM memories WHERE type = 'vanne'" },
-  { label: 'facts', sql: 'SELECT COUNT(*) AS c FROM facts' },
-  { label: 'summaries', sql: 'SELECT COUNT(*) AS c FROM summaries' },
-  { label: 'attachments', sql: 'SELECT COUNT(*) AS c FROM attachments' },
-  { label: 'tasks', sql: 'SELECT COUNT(*) AS c FROM tasks' },
-  { label: 'raw observations', sql: 'SELECT COUNT(*) AS c FROM raw_observations' },
-  { label: 'known members', sql: 'SELECT COUNT(*) AS c FROM known_members' },
-  { label: 'brain observations', sql: 'SELECT COUNT(*) AS c FROM brain_observations' },
-  { label: 'brain events', sql: 'SELECT COUNT(*) AS c FROM brain_events' },
-  { label: 'brain member patterns', sql: 'SELECT COUNT(*) AS c FROM brain_member_patterns' },
-  { label: 'brain context knowledge', sql: 'SELECT COUNT(*) AS c FROM brain_context_knowledge' },
-  { label: 'brain relationships', sql: 'SELECT COUNT(*) AS c FROM brain_relationships' },
-  { label: 'ai performance', sql: 'SELECT COUNT(*) AS c FROM ai_performance' },
-  { label: 'ai decisions', sql: 'SELECT COUNT(*) AS c FROM ai_decisions' }
-];
+async function listUserTables() {
+  const rows = await allQuery(`
+    SELECT name
+    FROM sqlite_master
+    WHERE type = 'table'
+      AND name NOT LIKE 'sqlite_%'
+    ORDER BY name ASC
+  `);
+  return rows.map(row => row.name);
+}
 
-async function printCounts(title) {
+async function printCounts(title, tables) {
   console.log(`\n=== ${title} ===`);
-  for (const query of COUNT_QUERIES) {
-    const rows = await allQuery(query.sql);
+  let totalRows = 0;
+
+  for (const tableName of tables) {
+    const rows = await allQuery(`SELECT COUNT(*) AS c FROM ${tableName}`);
     const count = rows?.[0]?.c ?? 0;
-    console.log(`${query.label}: ${count}`);
+    totalRows += count;
+    console.log(`${tableName}: ${count}`);
   }
+
+  console.log(`TOTAL ROWS: ${totalRows}`);
 }
 
 async function resetAssistantMemory() {
-  await printCounts('Avant reset');
+  const tables = await listUserTables();
+  if (tables.length === 0) {
+    console.log('Aucune table détectée, rien à reset.');
+    return;
+  }
+
+  const tablesToClear = tables.filter(table => !PRESERVED_TABLES.has(table));
+  const preservedFound = tables.filter(table => PRESERVED_TABLES.has(table));
+
+  await printCounts('Avant reset', tables);
+
+  if (preservedFound.length > 0) {
+    console.log(`\nTables préservées (non vidées): ${preservedFound.join(', ')}`);
+  }
 
   if (dryRun) {
-    console.log('\nDRY RUN: aucune suppression effectuée.');
+    console.log(`\nDRY RUN: ${tablesToClear.length} table(s) seraient vidées, ${preservedFound.length} préservée(s).`);
     return;
   }
 
   await runQuery('BEGIN TRANSACTION');
   try {
-    for (const query of RESET_QUERIES) {
-      await runQuery(query.sql);
-      console.log(`Cleared: ${query.label}`);
+    await runQuery('PRAGMA foreign_keys = OFF');
+
+    for (const tableName of tablesToClear) {
+      await runQuery(`DELETE FROM ${tableName}`);
+      console.log(`Cleared table: ${tableName}`);
     }
+
+    for (const tableName of tablesToClear) {
+      await runQuery('DELETE FROM sqlite_sequence WHERE name = ?', [tableName]);
+    }
+
+    await runQuery('PRAGMA foreign_keys = ON');
     await runQuery('COMMIT');
   } catch (error) {
     await runQuery('ROLLBACK');
+    await runQuery('PRAGMA foreign_keys = ON');
     throw error;
   }
 
-  await printCounts('Après reset');
+  await printCounts('Après reset', tables);
 }
 
 resetAssistantMemory()
