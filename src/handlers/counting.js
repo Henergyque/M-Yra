@@ -74,19 +74,19 @@ async function createCountingErrorThread(message) {
 }
 
 export async function handleCounting(message) {
-  const countingChannelId = await getChannelForFeature('counting', 'countingChannelId', config);
-  
-  if (!countingChannelId || message.channel.id !== countingChannelId) {
-    return false;
-  }
-
-  const maintenanceBlocked = await sendMaintenanceNotice(message);
-  if (maintenanceBlocked) {
-    return true;
-  }
-
   const lock = countingLocks.get(message.channel.id) ?? Promise.resolve();
   const nextLock = lock.then(async () => {
+    const countingChannelId = await getChannelForFeature('counting', 'countingChannelId', config);
+
+    if (!countingChannelId || message.channel.id !== countingChannelId) {
+      return false;
+    }
+
+    const maintenanceBlocked = await sendMaintenanceNotice(message);
+    if (maintenanceBlocked) {
+      return true;
+    }
+
     const { lastNumber, lastUserId } = await getCountingState(message.channel.id);
     const nextNumber = lastNumber + 1;
     const parsed = parseCountingNumber(message.content);

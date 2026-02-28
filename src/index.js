@@ -2920,6 +2920,11 @@ client.on('messageCreate', async (message) => {
     return;
   }
 
+  const handledCounting = await handleCounting(message);
+  if (handledCounting) {
+    return;
+  }
+
   // Met à jour le profil membre et les infos serveur
   await upsertMemberProfile(message.guild, message);
   await upsertServerInfo(message.guild);
@@ -2969,11 +2974,6 @@ client.on('messageCreate', async (message) => {
 
   const handledConfession = await handleConfession(message);
   if (handledConfession) {
-    return;
-  }
-
-  const handledCounting = await handleCounting(message);
-  if (handledCounting) {
     return;
   }
 
