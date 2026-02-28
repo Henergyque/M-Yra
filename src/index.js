@@ -10,6 +10,7 @@ import {
   Client,
   EmbedBuilder,
   GatewayIntentBits,
+  MessageFlags,
   Partials,
   PermissionsBitField,
   ThreadAutoArchiveDuration
@@ -433,7 +434,7 @@ async function handleRoastCommand(interaction) {
   } catch (err) {
     console.error('❌ Erreur /roast:', err);
     try {
-      await interaction.reply({ content: '❌ Erreur: ' + err.message, ephemeral: true });
+      await interaction.reply({ content: '❌ Erreur: ' + err.message, flags: MessageFlags.Ephemeral });
     } catch {}
   }
 }
@@ -574,7 +575,7 @@ async function handleDebateRespondCommand(interaction) {
   } catch (err) {
     console.error('❌ Erreur /debate-respond:', err);
     try {
-      await interaction.reply({ content: '❌ Erreur: ' + err.message, ephemeral: true });
+      await interaction.reply({ content: '❌ Erreur: ' + err.message, flags: MessageFlags.Ephemeral });
     } catch {}
   }
 }
@@ -668,7 +669,7 @@ async function handleDebateRespondGrokCommand(interaction) {
   } catch (err) {
     console.error('❌ Erreur /debate-respond-grok:', err);
     try {
-      await interaction.reply({ content: '❌ Erreur: ' + err.message, ephemeral: true });
+      await interaction.reply({ content: '❌ Erreur: ' + err.message, flags: MessageFlags.Ephemeral });
     } catch {}
   }
 }
@@ -762,7 +763,7 @@ async function handleDebateRespondOpenaiCommand(interaction) {
   } catch (err) {
     console.error('❌ Erreur /debate-respond-openai:', err);
     try {
-      await interaction.reply({ content: '❌ Erreur: ' + err.message, ephemeral: true });
+      await interaction.reply({ content: '❌ Erreur: ' + err.message, flags: MessageFlags.Ephemeral });
     } catch {}
   }
 }
@@ -896,7 +897,7 @@ async function handleVersusAiCommand(interaction) {
   } catch (err) {
     console.error('❌ Erreur /versusai:', err);
     try {
-      await interaction.reply({ content: '❌ Erreur: ' + err.message, ephemeral: true });
+      await interaction.reply({ content: '❌ Erreur: ' + err.message, flags: MessageFlags.Ephemeral });
     } catch {}
   }
 }
@@ -911,14 +912,14 @@ async function handleClearCommand(interaction) {
       messages: [{ role: 'user', content: 'Seul le créateur peut faire ça. Réponds en 1 ligne.' }],
       max_completion_tokens: 30
     });
-    await interaction.reply({ content: reply.choices[0].message.content, ephemeral: true });
+    await interaction.reply({ content: reply.choices[0].message.content, flags: MessageFlags.Ephemeral });
       return;
     }
 
     const nombre = interaction.options.getInteger('nombre');
 
     // Defer la réponse car ça peut prendre du temps
-    await interaction.deferReply();
+    await interaction.deferReply({ flags: MessageFlags.Ephemeral });
 
     // Supprimer les messages
     const messages = await interaction.channel.messages.fetch({ limit: nombre });
@@ -929,7 +930,12 @@ async function handleClearCommand(interaction) {
   } catch (err) {
     console.error('❌ Erreur /clear:', err);
     try {
-      await interaction.reply({ content: '❌ Erreur: ' + err.message, ephemeral: true });
+      const errorMessage = '❌ Erreur: ' + err.message;
+      if (interaction.deferred || interaction.replied) {
+        await interaction.editReply({ content: errorMessage });
+      } else {
+        await interaction.reply({ content: errorMessage, flags: MessageFlags.Ephemeral });
+      }
     } catch {}
   }
 }
@@ -949,7 +955,7 @@ async function handleStorySlashStart(interaction) {
         messages: [{ role: 'user', content: 'Une histoire est déjà active. Réponds en 1 ligne pour expliquer qu\'il faut attendre.' }],
         max_completion_tokens: 40
       });
-      await interaction.reply({ content: reply.choices[0].message.content, ephemeral: true });
+      await interaction.reply({ content: reply.choices[0].message.content, flags: MessageFlags.Ephemeral });
       return;
     }
 
@@ -1041,7 +1047,7 @@ async function handleStorySlashStart(interaction) {
   } catch (err) {
     console.error('❌ Erreur handleStorySlashStart:', err);
     try {
-      await interaction.reply({ content: '❌ Erreur: ' + err.message, ephemeral: true });
+      await interaction.reply({ content: '❌ Erreur: ' + err.message, flags: MessageFlags.Ephemeral });
     } catch {}
   }
 }
@@ -1059,7 +1065,7 @@ async function handleStorySlashJoin(interaction) {
         messages: [{ role: 'user', content: 'Aucune histoire active. Réponds en 1 ligne.' }],
         max_completion_tokens: 30
       });
-      await interaction.reply({ content: reply.choices[0].message.content, ephemeral: true });
+      await interaction.reply({ content: reply.choices[0].message.content, flags: MessageFlags.Ephemeral });
       return;
     }
 
@@ -1069,7 +1075,7 @@ async function handleStorySlashJoin(interaction) {
       messages: [{ role: 'user', content: 'Cette commande est pour le mode roleplay. Explique en 1 ligne comment lancer avec /story start.' }],
       max_completion_tokens: 40
     });
-    await interaction.reply({ content: reply.choices[0].message.content, ephemeral: true });
+    await interaction.reply({ content: reply.choices[0].message.content, flags: MessageFlags.Ephemeral });
     return;
   }
 
@@ -1120,7 +1126,7 @@ async function handleStorySlashJoin(interaction) {
   } catch (err) {
     console.error('❌ Erreur handleStorySlashJoin:', err);
     try {
-      await interaction.reply({ content: '❌ Erreur: ' + err.message, ephemeral: true });
+      await interaction.reply({ content: '❌ Erreur: ' + err.message, flags: MessageFlags.Ephemeral });
     } catch {}
   }
 }
@@ -1132,7 +1138,7 @@ async function handleStorySlashReady(interaction) {
     const story = getActiveStories().get(channelId);
 
     if (!story) {
-      await interaction.reply({ content: 'Aucune histoire en cours.', ephemeral: true });
+      await interaction.reply({ content: 'Aucune histoire en cours.', flags: MessageFlags.Ephemeral });
       return;
     }
 
@@ -1142,7 +1148,7 @@ async function handleStorySlashReady(interaction) {
         messages: [{ role: 'user', content: 'L\'histoire n\'est pas en attente de roleplay. Explique en 1 ligne.' }],
         max_completion_tokens: 35
       });
-      await interaction.reply({ content: reply.choices[0].message.content, ephemeral: true });
+      await interaction.reply({ content: reply.choices[0].message.content, flags: MessageFlags.Ephemeral });
       return;
     }
 
@@ -1152,7 +1158,7 @@ async function handleStorySlashReady(interaction) {
         messages: [{ role: 'user', content: 'Pas de joueurs. Explique en 1 ligne qu\'il faut faire /story join.' }],
         max_completion_tokens: 40
       });
-      await interaction.reply({ content: reply.choices[0].message.content, ephemeral: true });
+      await interaction.reply({ content: reply.choices[0].message.content, flags: MessageFlags.Ephemeral });
       return;
     }
 
@@ -1219,7 +1225,7 @@ async function handleStorySlashReady(interaction) {
   } catch (err) {
     console.error('❌ Erreur handleStorySlashReady:', err);
     try {
-      await interaction.reply({ content: '❌ Erreur: ' + err.message, ephemeral: true });
+      await interaction.reply({ content: '❌ Erreur: ' + err.message, flags: MessageFlags.Ephemeral });
     } catch {}
   }
 }
@@ -1231,7 +1237,7 @@ async function handleStorySlashEnd(interaction) {
     const story = getActiveStories().get(channelId);
 
     if (!story) {
-      await interaction.reply({ content: 'Aucune histoire en cours.', ephemeral: true });
+      await interaction.reply({ content: 'Aucune histoire en cours.', flags: MessageFlags.Ephemeral });
       return;
     }
 
@@ -1246,7 +1252,7 @@ async function handleStorySlashEnd(interaction) {
   } catch (err) {
     console.error('❌ Erreur handleStorySlashEnd:', err);
     try {
-      await interaction.reply({ content: '❌ Erreur: ' + err.message, ephemeral: true });
+      await interaction.reply({ content: '❌ Erreur: ' + err.message, flags: MessageFlags.Ephemeral });
     } catch {}
   }
 }
@@ -3073,7 +3079,7 @@ async function handleDiagnosticCommand(interaction) {
   if (interaction.user.id !== config.creatorId) {
     await interaction.reply({
       content: '❌ Seul le créateur peut utiliser cette commande.',
-      ephemeral: true
+      flags: MessageFlags.Ephemeral
     });
     return;
   }
@@ -3123,12 +3129,12 @@ async function handleDiagnosticCommand(interaction) {
 
     await interaction.reply({
       content: `**Diagnostic système**\n${summary}`,
-      ephemeral: true
+      flags: MessageFlags.Ephemeral
     });
   } catch (error) {
     await interaction.reply({
       content: `❌ Diagnostic impossible: ${error.message}`,
-      ephemeral: true
+      flags: MessageFlags.Ephemeral
     });
   }
 }
@@ -3137,7 +3143,7 @@ async function handleMemoryResetCommand(interaction) {
   if (interaction.user.id !== config.creatorId) {
     await interaction.reply({
       content: '❌ Seul le créateur peut utiliser cette commande.',
-      ephemeral: true
+      flags: MessageFlags.Ephemeral
     });
     return;
   }
@@ -3148,7 +3154,7 @@ async function handleMemoryResetCommand(interaction) {
   if (confirm !== 'RESET') {
     await interaction.reply({
       content: '❌ Confirmation invalide. Mets `confirm: RESET` pour exécuter.',
-      ephemeral: true
+      flags: MessageFlags.Ephemeral
     });
     return;
   }
@@ -3156,13 +3162,13 @@ async function handleMemoryResetCommand(interaction) {
   if (mode !== 'full_keep_games') {
     await interaction.reply({
       content: '❌ Mode non supporté.',
-      ephemeral: true
+      flags: MessageFlags.Ephemeral
     });
     return;
   }
 
   try {
-    await interaction.deferReply({ ephemeral: true });
+    await interaction.deferReply({ flags: MessageFlags.Ephemeral });
     const result = await resetMemoryDataPreservingGames();
 
     await interaction.editReply({
@@ -3183,7 +3189,7 @@ async function handleMaintenanceCommand(interaction) {
   if (interaction.user.id !== config.creatorId) {
     await interaction.reply({
       content: '❌ Seul le créateur peut gérer la maintenance.',
-      ephemeral: true
+      flags: MessageFlags.Ephemeral
     });
     return;
   }
@@ -3196,7 +3202,7 @@ async function handleMaintenanceCommand(interaction) {
       content: state.enabled
         ? `🛠️ Maintenance **active**\nMessage actuel: ${state.message}`
         : '✅ Maintenance **inactive**',
-      ephemeral: true
+      flags: MessageFlags.Ephemeral
     });
     return;
   }
@@ -3207,7 +3213,7 @@ async function handleMaintenanceCommand(interaction) {
     const state = await getMaintenanceState();
     await interaction.reply({
       content: `🛠️ Maintenance activée.\nMessage de blocage: ${state.message}`,
-      ephemeral: true
+      flags: MessageFlags.Ephemeral
     });
     return;
   }
@@ -3215,7 +3221,7 @@ async function handleMaintenanceCommand(interaction) {
   await setMaintenanceState(false);
   await interaction.reply({
     content: '✅ Maintenance désactivée. Les jeux sont de nouveau disponibles.',
-    ephemeral: true
+    flags: MessageFlags.Ephemeral
   });
 }
 
@@ -3223,7 +3229,7 @@ async function handleParlerCommand(interaction) {
   if (interaction.user.id !== config.creatorId) {
     await interaction.reply({
       content: '❌ Seul le créateur peut utiliser cette commande.',
-      ephemeral: true
+      flags: MessageFlags.Ephemeral
     });
     return;
   }
@@ -3234,7 +3240,7 @@ async function handleParlerCommand(interaction) {
   if (!targetChannel?.isTextBased?.()) {
     await interaction.reply({
       content: '❌ Le salon cible ne permet pas d\'envoyer des messages.',
-      ephemeral: true
+      flags: MessageFlags.Ephemeral
     });
     return;
   }
@@ -3247,7 +3253,7 @@ async function handleParlerCommand(interaction) {
 
   await interaction.reply({
     content: `✅ Message envoyé dans <#${targetChannel.id}>`,
-    ephemeral: true
+    flags: MessageFlags.Ephemeral
   });
 }
 
@@ -3296,12 +3302,12 @@ async function handleAnonymousRelayDm(message) {
 
 async function handleAutoModSimpleCommand(interaction) {
   if (!interaction.guild) {
-    await interaction.reply({ content: '❌ Cette commande doit être utilisée dans un serveur.', ephemeral: true });
+    await interaction.reply({ content: '❌ Cette commande doit être utilisée dans un serveur.', flags: MessageFlags.Ephemeral });
     return;
   }
 
   if (interaction.user.id !== config.creatorId) {
-    await interaction.reply({ content: '❌ Seul le créateur peut utiliser cette commande.', ephemeral: true });
+    await interaction.reply({ content: '❌ Seul le créateur peut utiliser cette commande.', flags: MessageFlags.Ephemeral });
     return;
   }
 
@@ -3309,7 +3315,7 @@ async function handleAutoModSimpleCommand(interaction) {
   if (!botPerms?.has(PermissionsBitField.Flags.ManageGuild)) {
     await interaction.reply({
       content: '❌ Il manque la permission `Manage Server` (MANAGE_GUILD) au bot pour gérer AutoMod.',
-      ephemeral: true
+      flags: MessageFlags.Ephemeral
     });
     return;
   }
@@ -3322,32 +3328,32 @@ async function handleAutoModSimpleCommand(interaction) {
 
   if (action === 'status') {
     if (!existingRule) {
-      await interaction.reply({ content: 'ℹ️ Aucune règle AutoMod simple active.', ephemeral: true });
+      await interaction.reply({ content: 'ℹ️ Aucune règle AutoMod simple active.', flags: MessageFlags.Ephemeral });
       return;
     }
 
     const keyword = existingRule.triggerMetadata?.keywordFilter?.[0] || '—';
     await interaction.reply({
       content: `✅ Règle active: **${existingRule.name}**\nMot-clé: **${keyword}**\nÉtat: ${existingRule.enabled ? 'activée' : 'désactivée'}`,
-      ephemeral: true
+      flags: MessageFlags.Ephemeral
     });
     return;
   }
 
   if (action === 'off') {
     if (!existingRule) {
-      await interaction.reply({ content: 'ℹ️ Aucune règle à supprimer.', ephemeral: true });
+      await interaction.reply({ content: 'ℹ️ Aucune règle à supprimer.', flags: MessageFlags.Ephemeral });
       return;
     }
 
     await interaction.guild.autoModerationRules.delete(existingRule.id, 'M-Yra AutoMod simple OFF');
-    await interaction.reply({ content: '🗑️ Règle AutoMod simple supprimée.', ephemeral: true });
+    await interaction.reply({ content: '🗑️ Règle AutoMod simple supprimée.', flags: MessageFlags.Ephemeral });
     return;
   }
 
   const keywordRaw = interaction.options.getString('mot', true).trim();
   if (!keywordRaw || keywordRaw.length > 60) {
-    await interaction.reply({ content: '❌ Le mot-clé doit contenir entre 1 et 60 caractères.', ephemeral: true });
+    await interaction.reply({ content: '❌ Le mot-clé doit contenir entre 1 et 60 caractères.', flags: MessageFlags.Ephemeral });
     return;
   }
 
@@ -3377,7 +3383,7 @@ async function handleAutoModSimpleCommand(interaction) {
 
   await interaction.reply({
     content: `🛡️ AutoMod simple activé. Mot-clé bloqué: **${keywordRaw}**`,
-    ephemeral: true
+    flags: MessageFlags.Ephemeral
   });
 }
 
@@ -3559,7 +3565,7 @@ client.on('interactionCreate', async (interaction) => {
     } catch (err) {
       console.error('❌ Erreur slash command:', err);
       try {
-        await interaction.reply({ content: '❌ Une erreur est survenue.', ephemeral: true });
+        await interaction.reply({ content: '❌ Une erreur est survenue.', flags: MessageFlags.Ephemeral });
       } catch {}
     }
     return;
@@ -3621,7 +3627,7 @@ client.on('interactionCreate', async (interaction) => {
   if (!game) {
     await interaction.reply({
       content: 'Cette partie est terminée ou inactive.',
-      ephemeral: true
+      flags: MessageFlags.Ephemeral
     });
     return;
   }
@@ -3632,7 +3638,7 @@ client.on('interactionCreate', async (interaction) => {
       if (!game.activeUserId) {
         await interaction.reply({
           content: 'Aucune partie en cours pour le moment.',
-          ephemeral: true
+          flags: MessageFlags.Ephemeral
         });
         return;
       }
@@ -3640,7 +3646,7 @@ client.on('interactionCreate', async (interaction) => {
       if (interaction.user.id !== game.activeUserId) {
         await interaction.reply({
           content: `Seul <@${game.activeUserId}> peut terminer la partie en cours.`,
-          ephemeral: true
+          flags: MessageFlags.Ephemeral
         });
         return;
       }
@@ -3657,7 +3663,7 @@ client.on('interactionCreate', async (interaction) => {
     if (game.activeUserId) {
       await interaction.reply({
         content: `Une partie est déjà en cours avec <@${game.activeUserId}>.`,
-        ephemeral: true
+        flags: MessageFlags.Ephemeral
       });
       return;
     }
