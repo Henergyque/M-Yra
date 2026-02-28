@@ -254,6 +254,25 @@ export function buildSlashCommands() {
 
   commands.push(
     new SlashCommandBuilder()
+      .setName('memory-reset')
+      .setDescription('🧨 Réinitialiser la mémoire du bot (creator only)')
+      .addStringOption(opt =>
+        opt.setName('mode')
+          .setDescription('Portée du reset')
+          .addChoices(
+            { name: 'Complet (garde counting + word game + classements)', value: 'full_keep_games' }
+          )
+          .setRequired(true)
+      )
+      .addStringOption(opt =>
+        opt.setName('confirm')
+          .setDescription('Tape RESET pour confirmer')
+          .setRequired(true)
+      )
+  );
+
+  commands.push(
+    new SlashCommandBuilder()
       .setName('parler')
       .setDescription('🕶️ Envoyer un message via M-Yra (creator only)')
       .addStringOption(opt =>

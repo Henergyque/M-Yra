@@ -210,6 +210,46 @@ function createActionToken() {
   return Math.random().toString(36).slice(2, 8).toUpperCase();
 }
 
+const RESET_PRESERVED_TABLES = new Set([
+  'counters',
+  'word_game_state',
+  'word_game_scores',
+  'word_game_history'
+]);
+
+async function resetMemoryDataPreservingGames() {
+  const rows = await allQuery(`
+    SELECT name
+    FROM sqlite_master
+    WHERE type = 'table' AND name NOT LIKE 'sqlite_%'
+  `);
+
+  const allTables = rows.map(row => row.name);
+  const tablesToClear = allTables.filter(table => !RESET_PRESERVED_TABLES.has(table));
+
+  await runQuery('BEGIN TRANSACTION');
+  try {
+    await runQuery('PRAGMA foreign_keys = OFF');
+
+    for (const tableName of tablesToClear) {
+      await runQuery(`DELETE FROM ${tableName}`);
+      await runQuery('DELETE FROM sqlite_sequence WHERE name = ?', [tableName]);
+    }
+
+    await runQuery('PRAGMA foreign_keys = ON');
+    await runQuery('COMMIT');
+  } catch (error) {
+    await runQuery('ROLLBACK');
+    await runQuery('PRAGMA foreign_keys = ON');
+    throw error;
+  }
+
+  return {
+    clearedTables: tablesToClear,
+    preservedTables: allTables.filter(table => RESET_PRESERVED_TABLES.has(table))
+  };
+}
+
 
 
 function isConfiguredChannel(channelId, list) {
@@ -3093,6 +3133,52 @@ async function handleDiagnosticCommand(interaction) {
   }
 }
 
+async function handleMemoryResetCommand(interaction) {
+  if (interaction.user.id !== config.creatorId) {
+    await interaction.reply({
+      content: '❌ Seul le créateur peut utiliser cette commande.',
+      ephemeral: true
+    });
+    return;
+  }
+
+  const mode = interaction.options.getString('mode', true);
+  const confirm = interaction.options.getString('confirm', true).trim().toUpperCase();
+
+  if (confirm !== 'RESET') {
+    await interaction.reply({
+      content: '❌ Confirmation invalide. Mets `confirm: RESET` pour exécuter.',
+      ephemeral: true
+    });
+    return;
+  }
+
+  if (mode !== 'full_keep_games') {
+    await interaction.reply({
+      content: '❌ Mode non supporté.',
+      ephemeral: true
+    });
+    return;
+  }
+
+  try {
+    await interaction.deferReply({ ephemeral: true });
+    const result = await resetMemoryDataPreservingGames();
+
+    await interaction.editReply({
+      content: [
+        '✅ Reset mémoire exécuté.',
+        `Tables vidées: ${result.clearedTables.length}`,
+        `Tables conservées: ${result.preservedTables.join(', ')}`
+      ].join('\n')
+    });
+  } catch (error) {
+    await interaction.editReply({
+      content: `❌ Reset mémoire échoué: ${error.message}`
+    });
+  }
+}
+
 async function handleMaintenanceCommand(interaction) {
   if (interaction.user.id !== config.creatorId) {
     await interaction.reply({
@@ -3461,6 +3547,7 @@ client.on('interactionCreate', async (interaction) => {
           handleConfigCommand,
           handleMaintenanceCommand,
           handleDiagnosticCommand,
+          handleMemoryResetCommand,
           handleParlerCommand,
           handleAutoModSimpleCommand,
           handleStorySlashStart,

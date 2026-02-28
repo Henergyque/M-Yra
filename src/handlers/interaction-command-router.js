@@ -62,6 +62,11 @@ export async function dispatchChatInputCommand(interaction, context) {
     return true;
   }
 
+  if (commandName === 'memory-reset') {
+    await handlers.handleMemoryResetCommand(interaction);
+    return true;
+  }
+
   if (commandName === 'parler') {
     await handlers.handleParlerCommand(interaction);
     return true;
