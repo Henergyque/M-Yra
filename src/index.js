@@ -12,7 +12,6 @@ import {
   GatewayIntentBits,
   Partials,
   PermissionsBitField,
-  SlashCommandBuilder,
   ThreadAutoArchiveDuration
 } from 'discord.js';
 import { config } from './config.js';
@@ -21,6 +20,7 @@ import {
   addMemory,
   getMemoriesForUser,
   searchMemories,
+  searchMemoriesSemantic,
   getAllMemories,
   deleteMemory,
   loadConversationHistory,
@@ -34,21 +34,27 @@ import {
   setKnownMember,
   removeKnownMember,
   listKnownMembers,
-  pruneConversationMemory
+  pruneConversationMemory,
+  upsertMemoryEmbedding,
+  getUserMemorySlots,
+  extractAndStoreMemorySlots
 } from './brain/memory.js';
 import { openai, grok, claude, geminiModel, mistral, perplexity } from './ai/clients.js';
-import { aiRouter } from './ai/router.js';
 import { aiResponseBuilder } from './ai/response-builder.js';
-import { handleCounting, getCountingState, setCountingState } from './handlers/counting.js';
+import { handleCounting, setCountingState } from './handlers/counting.js';
 import { handleConfession, handleAdminConfessionLookup } from './handlers/confession.js';
 import { handleSupportCommand } from './handlers/support.js';
 import { handleWordGame, handleWordStats } from './handlers/word-game.js';
 import { handleThreadCreation } from './handlers/thread.js';
 import { getChannelForFeature } from './utils/channel-helper.js';
 import { getMaintenanceState, setMaintenanceState } from './utils/maintenance.js';
+import { getUserPreferences } from './services/user-preferences.js';
 import { handleStoryContribution, finishStory, getActiveStories, setActiveStory, deleteActiveStory } from './handlers/story.js';
 import { handleActionVeriteCommand, getActionVeriteGames, getActionVeriteLocks, createActionVeriteRow } from './handlers/action-verite.js';
-import { handleQuizCommand, getActiveQuiz } from './handlers/quiz.js';
+import { handleQuizCommand } from './handlers/quiz.js';
+import { handleModelCommand, handlePreferencesCommand, handleConfigCommand } from './handlers/preferences-config.js';
+import { dispatchChatInputCommand } from './handlers/interaction-command-router.js';
+import { buildSlashCommands } from './commands/slash-builders.js';
 
 process.on('unhandledRejection', (reason) => {
   console.error('❌ Unhandled rejection:', reason);
@@ -63,8 +69,8 @@ const __dirname = path.dirname(__filename);
 
 // Helper: build git push command with optional GitHub token
 function getGitPushCommand(targetBranch) {
-  const repoUrl = config.githubRepo;
-  const token = config.githubToken;
+  const repoUrl = config.github?.repo;
+  const token = config.github?.token;
   if (!repoUrl) {
     return null;
   }
@@ -92,6 +98,12 @@ const client = new Client({
 
 // Debate state - track message count per channel for crescendo
 const debateState = new Map();
+const memberProfileUpsertAt = new Map();
+const serverInfoUpsertAt = new Map();
+const pendingAssistantActions = new Map();
+const MEMBER_PROFILE_UPSERT_MS = 15_000;
+const SERVER_INFO_UPSERT_MS = 60_000;
+const ASSISTANT_ACTION_CONFIRM_TTL_MS = 2 * 60 * 1000;
 
 
 // Profils membres et infos serveur
@@ -159,6 +171,45 @@ async function upsertServerInfo(guild) {
   }
 }
 
+function estimateTokens(promptText, responseText = '') {
+  const chars = String(promptText || '').length + String(responseText || '').length;
+  return Math.max(1, Math.round(chars / 4));
+}
+
+async function logAIRequest({ userId, channelId, model, route = 'assistant', latencyMs, success = true, fallbackUsed = false, promptChars = 0, responseChars = 0, errorMessage = null }) {
+  try {
+    const estimatedTokens = estimateTokens('x'.repeat(promptChars), 'x'.repeat(responseChars));
+    await runQuery(
+      `INSERT INTO ai_request_logs (user_id, channel_id, model, route, latency_ms, success, fallback_used, prompt_chars, response_chars, estimated_tokens, error_message, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [
+        userId || null,
+        channelId || null,
+        model || 'opus',
+        route,
+        latencyMs ?? null,
+        success ? 1 : 0,
+        fallbackUsed ? 1 : 0,
+        promptChars,
+        responseChars,
+        estimatedTokens,
+        errorMessage,
+        new Date().toISOString()
+      ]
+    );
+  } catch (error) {
+    console.warn('⚠️ Failed to log AI request:', error.message);
+  }
+}
+
+function createPendingActionKey(guildId, channelId, userId) {
+  return `${guildId}:${channelId}:${userId}`;
+}
+
+function createActionToken() {
+  return Math.random().toString(36).slice(2, 8).toUpperCase();
+}
+
 
 
 function isConfiguredChannel(channelId, list) {
@@ -185,6 +236,9 @@ function parseJsonSafe(value, fallback = undefined) {
 
 const MEMORY_TABLES = {
   memories: { orderBy: 'created_at DESC', maxLimit: 200 },
+  user_memory_slots: { orderBy: 'updated_at DESC', maxLimit: 200 },
+  memory_embeddings: { orderBy: 'created_at DESC', maxLimit: 200 },
+  ai_request_logs: { orderBy: 'created_at DESC', maxLimit: 200 },
   facts: { orderBy: 'created_at DESC', maxLimit: 200 },
   summaries: { orderBy: 'created_at DESC', maxLimit: 200 },
   attachments: { orderBy: 'created_at DESC', maxLimit: 200 },
@@ -206,6 +260,9 @@ const MEMORY_TABLES = {
 
 const MEMORY_TABLE_KEYS = {
   memories: 'id',
+  user_memory_slots: 'user_id',
+  memory_embeddings: 'id',
+  ai_request_logs: 'id',
   facts: 'id',
   summaries: 'id',
   attachments: 'id',
@@ -227,6 +284,9 @@ const MEMORY_TABLE_KEYS = {
 
 const MEMORY_TABLE_FIELDS = {
   memories: ['type', 'subject', 'user_id', 'content', 'created_at', 'created_by'],
+  user_memory_slots: ['objective', 'pro_context', 'preferences', 'constraints', 'updated_at'],
+  memory_embeddings: ['memory_id', 'user_id', 'memory_type', 'source_text', 'embedding', 'created_at'],
+  ai_request_logs: ['user_id', 'channel_id', 'model', 'route', 'latency_ms', 'success', 'fallback_used', 'prompt_chars', 'response_chars', 'estimated_tokens', 'error_message', 'created_at'],
   facts: ['fact_type', 'subject', 'data', 'importance', 'created_at'],
   summaries: ['scope', 'period', 'content', 'created_at'],
   attachments: ['url', 'description', 'source_user_id', 'source_message_id', 'metadata', 'created_at'],
@@ -259,6 +319,11 @@ const MEMORY_TABLE_ALIASES = {
   memory: 'memories',
   memo: 'memories',
   mem: 'memories',
+  slots: 'user_memory_slots',
+  slot: 'user_memory_slots',
+  embeddings: 'memory_embeddings',
+  requests: 'ai_request_logs',
+  logs: 'ai_request_logs',
   fact: 'facts',
   summary: 'summaries',
   attachment: 'attachments',
@@ -1175,27 +1240,90 @@ async function handleAIAssistant(message) {
 
     // Fetch last 10 messages for context
     const messages = await message.channel.messages.fetch({ limit: 11 });
-    const contextMessages = Array.from(messages.values())
+    const sortedMessages = Array.from(messages.values())
       .reverse()
-      .slice(0, 10)
-      .map(m => `${m.author.username}: ${m.content}`)
-      .join('\n');
+      .slice(0, 10);
+
+    const previousMessage = sortedMessages.filter(m => m.id !== message.id).at(-1) || null;
+    const cooldownMs = Math.max(1, config.assistantConversationCooldownMinutes || 90) * 60 * 1000;
+    const isConversationCooldown = previousMessage
+      ? (message.createdTimestamp - previousMessage.createdTimestamp) > cooldownMs
+      : false;
+
+    const contextMessages = isConversationCooldown
+      ? `${message.author.username}: ${message.content}`
+      : sortedMessages.map(m => `${m.author.username}: ${m.content}`).join('\n');
+
+    await extractAndStoreMemorySlots(message.author.id, userQuestion);
 
     // Load relevant memories for context
     let memoryContext = '';
+
+    const userMemoriesPromise = getMemoriesForUser(message.author.id, 20, { maxAgeDays: 30 });
+    const userSlotsPromise = getUserMemorySlots(message.author.id);
+    const keywordMemoriesPromise = isConversationCooldown
+      ? Promise.resolve([])
+      : searchMemories(userQuestion, { userId: message.author.id, limit: 60, maxAgeDays: 14 });
+    const semanticMemoriesPromise = searchMemoriesSemantic(userQuestion, {
+      userId: message.author.id,
+      limit: 5,
+      minScore: 0.24,
+      maxAgeDays: 45
+    });
+    const topicAnchorsPromise = isConversationCooldown
+      ? loadTopicAnchorsForUser(message.author.id, userQuestion, 2)
+      : Promise.resolve([]);
+
+    const [userMemories, userSlots, keywordMemories, semanticMemories, topicAnchors] = await Promise.all([
+      userMemoriesPromise,
+      userSlotsPromise,
+      keywordMemoriesPromise,
+      semanticMemoriesPromise,
+      topicAnchorsPromise
+    ]);
+
+    if (userSlots) {
+      const slotLines = [];
+      if (userSlots.objective) slotLines.push(`- Objectif: ${userSlots.objective}`);
+      if (userSlots.pro_context) slotLines.push(`- Contexte pro: ${userSlots.pro_context}`);
+      if (userSlots.preferences) slotLines.push(`- Préférences: ${userSlots.preferences}`);
+      if (userSlots.constraints) slotLines.push(`- Contraintes: ${userSlots.constraints}`);
+      if (slotLines.length > 0) {
+        memoryContext += `\n\nProfil durable de ${message.author.username}:\n${slotLines.join('\n')}`;
+      }
+    }
     
     // 1. Get memories about the current user
-    const userMemories = await getMemoriesForUser(message.author.id, 30);
     if (userMemories.length > 0) {
       memoryContext += `\n\nInfos sur ${message.author.username}:\n` + 
         userMemories.slice(0, 3).map(m => `- ${m.content}`).join('\n');
     }
     
     // 2. Search memories related to question keywords
-    const keywordMemories = await searchMemories(userQuestion, { userId: message.author.id, limit: 100 });
     if (keywordMemories.length > 0) {
       memoryContext += `\n\nInfos pertinentes:\n` + 
         keywordMemories.slice(0, 3).map(m => `- ${m.content}`).join('\n');
+    }
+
+    if (semanticMemories.length > 0) {
+      const semanticLines = semanticMemories
+        .slice(0, 3)
+        .map(memory => memory.content || memory.source_text)
+        .filter(Boolean)
+        .map(text => `- ${String(text).slice(0, 240)}`);
+
+      if (semanticLines.length > 0) {
+        memoryContext += `\n\nMémoire sémantique:\n${semanticLines.join('\n')}`;
+      }
+    }
+
+    if (isConversationCooldown) {
+      memoryContext += '\n\nContexte: nouvelle session (ancien sujet expiré après inactivité).';
+
+      if (topicAnchors.length > 0) {
+        memoryContext += '\n\nRappels importants à garder en tête:\n' +
+          topicAnchors.map(anchor => `- ${anchor.summary}`).join('\n');
+      }
     }
 
     // === Execute Actions First (if creator) ===
@@ -1205,13 +1333,32 @@ async function handleAIAssistant(message) {
       const deleteNumMatch = userQuestion.match(/supprime?\s+(?:les?\s+)?(\d+)\s+(?:derniers?\s+)?messages?/i);
       
       if (deleteAllMatch) {
-        await bulkDeleteMessages(message, 100);
-        await message.channel.send('voilà j\'ai tout viré');
+        const token = createActionToken();
+        const pendingKey = createPendingActionKey(message.guild.id, message.channelId, message.author.id);
+        pendingAssistantActions.set(pendingKey, {
+          token,
+          type: 'DELETE',
+          count: 100,
+          expiresAt: Date.now() + ASSISTANT_ACTION_CONFIRM_TTL_MS
+        });
+        await message.channel.send(`⚠️ Suppression massive demandée. Confirme avec \`confirm ${token}\` (expire dans 2 min).`);
         return;
       }
       
       if (deleteNumMatch) {
         const count = parseInt(deleteNumMatch[1]);
+        if (count > 20) {
+          const token = createActionToken();
+          const pendingKey = createPendingActionKey(message.guild.id, message.channelId, message.author.id);
+          pendingAssistantActions.set(pendingKey, {
+            token,
+            type: 'DELETE',
+            count,
+            expiresAt: Date.now() + ASSISTANT_ACTION_CONFIRM_TTL_MS
+          });
+          await message.channel.send(`⚠️ Suppression de ${count} messages demandée. Confirme avec \`confirm ${token}\` (expire dans 2 min).`);
+          return;
+        }
         await bulkDeleteMessages(message, count);
         return;
       }
@@ -1239,12 +1386,36 @@ async function handleAIAssistant(message) {
       }
 
       // Get AI response with intelligent routing
-      const assistantResponse = await getAIAssistantResponse(userQuestion, contextMessages + memoryContext + codeContext, isCreator, message.author.id, message);
+      const promptContext = contextMessages + memoryContext + codeContext;
+      const startedAt = Date.now();
+      const assistantResponse = await getAIAssistantResponse(userQuestion, promptContext, isCreator, message.author.id, message);
 
       if (!assistantResponse) {
+        await logAIRequest({
+          userId: message.author.id,
+          channelId: message.channelId,
+          model: 'opus',
+          route: 'assistant',
+          latencyMs: Date.now() - startedAt,
+          success: false,
+          promptChars: promptContext.length + userQuestion.length,
+          responseChars: 0,
+          errorMessage: 'empty_response'
+        });
         await message.channel.send('❌ Erreur lors de la génération de la réponse.');
         return;
       }
+
+      await logAIRequest({
+        userId: message.author.id,
+        channelId: message.channelId,
+        model: 'opus',
+        route: 'assistant',
+        latencyMs: Date.now() - startedAt,
+        success: true,
+        promptChars: promptContext.length + userQuestion.length,
+        responseChars: assistantResponse.length
+      });
 
       // Check if AI wants to execute an action (for creator only)
       if (isCreator) {
@@ -1261,6 +1432,21 @@ async function handleAIAssistant(message) {
           const count = parseInt(deleteAction[1]);
           const cleanResponse = assistantResponse.replace(/\[\[DELETE:\d+\]\]/, '').trim();
           if (cleanResponse) await message.channel.send(cleanResponse);
+
+          if (count > 20) {
+            const token = createActionToken();
+            const pendingKey = createPendingActionKey(message.guild.id, message.channelId, message.author.id);
+            pendingAssistantActions.set(pendingKey, {
+              token,
+              type: 'DELETE',
+              count,
+              expiresAt: Date.now() + ASSISTANT_ACTION_CONFIRM_TTL_MS
+            });
+
+            await message.channel.send(`⚠️ Action sensible détectée: suppression de ${count} messages. Confirme avec \`confirm ${token}\` (expire dans 2 min).`);
+            return;
+          }
+
           await bulkDeleteMessages(message, count);
           return;
         }
@@ -1269,12 +1455,16 @@ async function handleAIAssistant(message) {
           const userId = userIdMatch ? userIdMatch[0] : banAction[1];
           const cleanResponse = assistantResponse.replace(/\[\[BAN:[^\]]+\]\]/, '').trim();
           if (cleanResponse) await message.channel.send(cleanResponse);
-          const member = await message.guild.members.fetch(userId).catch(() => null);
-          if (member) {
-            await member.ban({ reason: 'Banned by assistant' });
-          } else {
-            await message.channel.send('utilisateur introuvable');
-          }
+          const token = createActionToken();
+          const pendingKey = createPendingActionKey(message.guild.id, message.channelId, message.author.id);
+          pendingAssistantActions.set(pendingKey, {
+            token,
+            type: 'BAN',
+            userId,
+            expiresAt: Date.now() + ASSISTANT_ACTION_CONFIRM_TTL_MS
+          });
+
+          await message.channel.send(`⚠️ Action sensible détectée: ban de <@${userId}>. Confirme avec \`confirm ${token}\` (expire dans 2 min).`);
           return;
         }
         if (kickAction) {
@@ -1282,12 +1472,16 @@ async function handleAIAssistant(message) {
           const userId = userIdMatch ? userIdMatch[0] : kickAction[1];
           const cleanResponse = assistantResponse.replace(/\[\[KICK:[^\]]+\]\]/, '').trim();
           if (cleanResponse) await message.channel.send(cleanResponse);
-          const member = await message.guild.members.fetch(userId).catch(() => null);
-          if (member) {
-            await member.kick('Kicked by assistant');
-          } else {
-            await message.channel.send('utilisateur introuvable');
-          }
+          const token = createActionToken();
+          const pendingKey = createPendingActionKey(message.guild.id, message.channelId, message.author.id);
+          pendingAssistantActions.set(pendingKey, {
+            token,
+            type: 'KICK',
+            userId,
+            expiresAt: Date.now() + ASSISTANT_ACTION_CONFIRM_TTL_MS
+          });
+
+          await message.channel.send(`⚠️ Action sensible détectée: kick de <@${userId}>. Confirme avec \`confirm ${token}\` (expire dans 2 min).`);
           return;
         }
         if (muteAction) {
@@ -1296,12 +1490,17 @@ async function handleAIAssistant(message) {
           const duration = parseInt(muteAction[3]);
           const cleanResponse = assistantResponse.replace(/\[\[MUTE:[^\]]+\]\]/, '').trim();
           if (cleanResponse) await message.channel.send(cleanResponse);
-          const member = await message.guild.members.fetch(userId).catch(() => null);
-          if (member) {
-            await member.timeout(duration * 60 * 1000, 'Muted by assistant');
-          } else {
-            await message.channel.send('utilisateur introuvable');
-          }
+          const token = createActionToken();
+          const pendingKey = createPendingActionKey(message.guild.id, message.channelId, message.author.id);
+          pendingAssistantActions.set(pendingKey, {
+            token,
+            type: 'MUTE',
+            userId,
+            duration,
+            expiresAt: Date.now() + ASSISTANT_ACTION_CONFIRM_TTL_MS
+          });
+
+          await message.channel.send(`⚠️ Action sensible détectée: mute ${duration} min pour <@${userId}>. Confirme avec \`confirm ${token}\` (expire dans 2 min).`);
           return;
         }
         if (monitorAction) {
@@ -1736,6 +1935,16 @@ async function handleAIAssistant(message) {
       }
     } catch (error) {
       console.error('❌ Erreur assistant IA:', error);
+      await logAIRequest({
+        userId: message.author.id,
+        channelId: message.channelId,
+        model: 'opus',
+        route: 'assistant',
+        success: false,
+        promptChars: userQuestion.length,
+        responseChars: 0,
+        errorMessage: error.message
+      });
       await message.channel.send('❌ Erreur lors de la génération de la réponse. Réessayez!');
     }
   } catch (error) {
@@ -2239,6 +2448,88 @@ async function getBrainKnowledge(model) {
   }
 }
 
+const TOPIC_ANCHOR_MAX_PER_USER = 2;
+const TOPIC_ANCHOR_MAX_AGE_DAYS = 30;
+
+function shouldCreateTopicAnchor(userMessage) {
+  const text = String(userMessage || '').trim();
+  if (!text) return false;
+  if (text.startsWith('!') || text.startsWith('/')) return false;
+
+  const words = text.split(/\s+/).filter(Boolean).length;
+  const hasSeriousKeywords = /(probl[eè]me|travail|boulot|emploi|entretien|exam|étude|cours|sant[ée]|stress|anxi|relation|famille|argent|projet|objectif|rdv|rendez-vous|thérapie|m[eé]dic|diagnostic|justice|contrat|d[eé]m[eé]nage)/i.test(text);
+
+  return hasSeriousKeywords || (text.length >= 120 && words >= 12);
+}
+
+function buildTopicAnchorSummary(userMessage) {
+  const normalized = String(userMessage || '')
+    .replace(/\s+/g, ' ')
+    .trim();
+
+  if (normalized.length <= 220) {
+    return normalized;
+  }
+
+  return `${normalized.slice(0, 217)}...`;
+}
+
+async function loadTopicAnchorsForUser(userId, question, limit = 2) {
+  if (!userId) return [];
+
+  const safeLimit = Math.max(1, Math.min(limit, TOPIC_ANCHOR_MAX_PER_USER));
+  const cutoff = new Date(Date.now() - TOPIC_ANCHOR_MAX_AGE_DAYS * 24 * 60 * 60 * 1000).toISOString();
+  const rows = await allQuery(
+    `SELECT content, created_at
+     FROM memories
+     WHERE type = 'topic_anchor'
+       AND user_id = ?
+       AND created_at >= ?
+     ORDER BY created_at DESC
+     LIMIT ?`,
+    [userId, cutoff, 20]
+  );
+
+  if (!rows || rows.length === 0) {
+    return [];
+  }
+
+  const questionTerms = String(question || '')
+    .toLowerCase()
+    .split(/\s+/)
+    .filter(term => term.length > 3)
+    .slice(0, 12);
+
+  const parsed = rows
+    .map(row => {
+      try {
+        const data = JSON.parse(row.content);
+        return {
+          summary: data.summary || '',
+          createdAt: row.created_at
+        };
+      } catch {
+        return null;
+      }
+    })
+    .filter(Boolean)
+    .filter(anchor => anchor.summary);
+
+  if (parsed.length === 0) {
+    return [];
+  }
+
+  const scored = parsed
+    .map(anchor => {
+      const text = anchor.summary.toLowerCase();
+      const score = questionTerms.reduce((acc, term) => acc + (text.includes(term) ? 1 : 0), 0);
+      return { ...anchor, score };
+    })
+    .sort((a, b) => b.score - a.score || (b.createdAt > a.createdAt ? 1 : -1));
+
+  return scored.slice(0, safeLimit);
+}
+
 
 // Save conversation exchange to memory with enriched context
 async function saveConversationMemory(userId, userMessage, assistantResponse, channelId = null, mentionedUsers = [], username = 'Unknown') {
@@ -2277,7 +2568,7 @@ async function saveConversationMemory(userId, userMessage, assistantResponse, ch
        VALUES (?, ?, ?, ?, ?, ?)`,
       ['conversation', `channel:${channelId}`, userId, assistantContent, timestamp, 'claude']
     );
-    
+
     // If message contains a vanne/joke pattern, save it separately
     if (/\b(mdr|lol|haha|ptdr|t.*con|débile|con|nul|pourri|trash|débeuler)\b/i.test(userMessage)) {
       const vanneContent = JSON.stringify({
@@ -2288,11 +2579,44 @@ async function saveConversationMemory(userId, userMessage, assistantResponse, ch
         text: userMessage,
         timestamp
       });
-      
+
       await runQuery(
         `INSERT INTO memories (type, subject, user_id, content, created_at, created_by) 
          VALUES (?, ?, ?, ?, ?, ?)`,
         ['vanne', 'joke', userId, vanneContent, timestamp, userId]
+      );
+    }
+
+    if (shouldCreateTopicAnchor(userMessage) && userMessage.trim() !== '') {
+      const anchorContent = JSON.stringify({
+        summary: buildTopicAnchorSummary(userMessage),
+        source: 'conversation',
+        timestamp
+      });
+
+      const inserted = await runQuery(
+        `INSERT INTO memories (type, subject, user_id, content, created_at, created_by)
+         VALUES (?, ?, ?, ?, ?, ?)`,
+        ['topic_anchor', 'long_term_topic', userId, anchorContent, timestamp, userId]
+      );
+
+      await upsertMemoryEmbedding(
+        inserted.lastID,
+        userId,
+        'topic_anchor',
+        buildTopicAnchorSummary(userMessage)
+      );
+
+      await runQuery(
+        `DELETE FROM memories
+         WHERE id IN (
+           SELECT id
+           FROM memories
+           WHERE type = 'topic_anchor' AND user_id = ?
+           ORDER BY created_at DESC
+           LIMIT -1 OFFSET ?
+         )`,
+        [userId, TOPIC_ANCHOR_MAX_PER_USER]
       );
     }
 
@@ -2303,29 +2627,20 @@ async function saveConversationMemory(userId, userMessage, assistantResponse, ch
   }
 }
 
-// Get AI response with intelligent routing (uses aiRouter + aiResponseBuilder)
+// Get AI response (assistant is Opus-only)
 async function getAIAssistantResponse(question, context, isCreator = false, userId = null, message = null) {
   try {
     // Load user preferences
     let userPrefs = null;
     if (userId) {
-      userPrefs = await getQuery('SELECT * FROM user_preferences WHERE user_id = ?', [userId]);
+      userPrefs = await getUserPreferences(userId);
     }
 
-    // Detect intent and route to optimal model
-    const routingContext = {
-      hasAttachments: message?.attachments?.size > 0,
-      messageLength: question.length,
-      mentions: message?.mentions?.users?.map(u => u.id) || [],
-      userId: userId
+    const routing = {
+      model: 'opus',
+      urgency: 'normal',
+      reason: 'ASSISTANT_OPUS_ONLY'
     };
-
-    // Override model if user has preference (and not auto)
-    let routing = await aiRouter.route(question, routingContext);
-    if (userPrefs && userPrefs.ai_model_preference && userPrefs.ai_model_preference !== 'auto') {
-      routing.model = userPrefs.ai_model_preference;
-      routing.reason = `User preference: ${userPrefs.ai_model_preference}`;
-    }
     console.log(`🧠 Routing: ${routing.model} (${routing.reason})`);
 
     // Load appropriate prompt from database or use default
@@ -2439,7 +2754,7 @@ POUR LE WORD GAME:
 
 POUR LA MÉMOIRE:
 - Utilise MEMORY/FACT/SUMMARY/ATTACH/TASK/OBS/KNOWN_MEMBER pour toucher toutes les tables
-- Pour voir: [[MEMORY_LIST:table:limit]] (table: memories, facts, summaries, attachments, tasks, raw_observations, known_members, member_profiles, server_info, brain_observations, brain_events, brain_member_patterns, brain_context_knowledge, brain_relationships, ai_performance, ai_decisions, ai_prompts, ai_metrics_history)
+- Pour voir: [[MEMORY_LIST:table:limit]] (table: memories, user_memory_slots, memory_embeddings, ai_request_logs, facts, summaries, attachments, tasks, raw_observations, known_members, member_profiles, server_info, brain_observations, brain_events, brain_member_patterns, brain_context_knowledge, brain_relationships, ai_performance, ai_decisions, ai_prompts, ai_metrics_history)
 - Pour télécharger: [[MEMORY_EXPORT:table:limit]] ou [[MEMORY_EXPORT:all:limit]]
 - Pour modifier: [[MEMORY_UPDATE:table:id:{"champ":"valeur"}]] (champs autorisés selon la table)
 
@@ -2538,6 +2853,51 @@ async function bulkDeleteMessages(message, count) {
   } catch (error) {
     console.error('❌ Erreur bulk delete:', error);
     await message.channel.send('❌ Erreur lors de la suppression');
+  }
+}
+
+async function executePendingAssistantAction(message, pendingAction) {
+  if (!pendingAction || !pendingAction.type) {
+    return;
+  }
+
+  if (pendingAction.type === 'DELETE') {
+    await bulkDeleteMessages(message, pendingAction.count);
+    await message.channel.send(`✅ Suppression exécutée (${pendingAction.count} messages).`);
+    return;
+  }
+
+  if (pendingAction.type === 'BAN') {
+    const member = await message.guild.members.fetch(pendingAction.userId).catch(() => null);
+    if (!member) {
+      await message.channel.send('❌ utilisateur introuvable');
+      return;
+    }
+    await member.ban({ reason: 'Banned by assistant (confirmed)' });
+    await message.channel.send(`✅ <@${pendingAction.userId}> a été banni.`);
+    return;
+  }
+
+  if (pendingAction.type === 'KICK') {
+    const member = await message.guild.members.fetch(pendingAction.userId).catch(() => null);
+    if (!member) {
+      await message.channel.send('❌ utilisateur introuvable');
+      return;
+    }
+    await member.kick('Kicked by assistant (confirmed)');
+    await message.channel.send(`✅ <@${pendingAction.userId}> a été expulsé.`);
+    return;
+  }
+
+  if (pendingAction.type === 'MUTE') {
+    const member = await message.guild.members.fetch(pendingAction.userId).catch(() => null);
+    if (!member) {
+      await message.channel.send('❌ utilisateur introuvable');
+      return;
+    }
+    const durationMinutes = Math.max(1, Number(pendingAction.duration) || 1);
+    await member.timeout(durationMinutes * 60 * 1000, 'Muted by assistant (confirmed)');
+    await message.channel.send(`✅ <@${pendingAction.userId}> mute ${durationMinutes} min.`);
   }
 }
 
@@ -2669,37 +3029,67 @@ async function executeMuteAction(message, question) {
   }
 }
 
-// Map pour stocker les préférences de modèle par utilisateur (temporaire)
-const userModelPreference = new Map();
+async function handleDiagnosticCommand(interaction) {
+  if (interaction.user.id !== config.creatorId) {
+    await interaction.reply({
+      content: '❌ Seul le créateur peut utiliser cette commande.',
+      ephemeral: true
+    });
+    return;
+  }
 
-async function handleModelCommand(interaction) {
   try {
-    const choice = interaction.options.getString('choice');
-    const userId = interaction.user.id;
-    
-    userModelPreference.set(userId, choice);
-    
-    const modelNames = {
-      'opus': 'Claude Opus 4.5 (perfection)',
-      'sonnet': 'Claude Sonnet 4.5 (équilibré)',
-      'haiku': 'Claude Haiku 4.5 (ultra-rapide)',
-      'gemini': 'Gemini 2.0 (vision/long contexte)',
-      'mistral': 'Mistral Large (rapide)',
-      'perplexity': 'Perplexity (recherche web)',
-      'auto': 'Routage automatique intelligent'
-    };
-    
-    const embed = {
-      title: '🤖 Modèle IA Sélectionné',
-      description: `Votre prochaine question utilisera : **${modelNames[choice]}**`,
-      color: 0x5865f2,
-      footer: { text: 'Cette préférence s\'applique à toutes vos prochaines questions' }
-    };
-    
-    await interaction.reply({ embeds: [embed], ephemeral: true });
+    const since24h = new Date(Date.now() - (24 * 60 * 60 * 1000)).toISOString();
+    const uptimeSeconds = Math.floor(process.uptime());
+    const uptimeHours = Math.floor(uptimeSeconds / 3600);
+    const uptimeMinutes = Math.floor((uptimeSeconds % 3600) / 60);
+
+    const [
+      dbVersionRow,
+      memoryCountRow,
+      slotCountRow,
+      embeddingCountRow,
+      aiStatsRow
+    ] = await Promise.all([
+      getQuery('PRAGMA user_version'),
+      getQuery('SELECT COUNT(*) AS total FROM memories'),
+      getQuery('SELECT COUNT(*) AS total FROM user_memory_slots'),
+      getQuery('SELECT COUNT(*) AS total FROM memory_embeddings'),
+      getQuery(
+        `SELECT
+            COUNT(*) AS total,
+            SUM(CASE WHEN success = 0 THEN 1 ELSE 0 END) AS failed,
+            AVG(latency_ms) AS avg_latency,
+            SUM(fallback_used) AS fallback_count,
+            MAX(created_at) AS last_request_at
+         FROM ai_request_logs
+         WHERE created_at >= ?`,
+        [since24h]
+      )
+    ]);
+
+    const activePendingActions = Array.from(pendingAssistantActions.values())
+      .filter(item => item.expiresAt > Date.now()).length;
+
+    const summary = [
+      `🟢 Uptime: ${uptimeHours}h ${uptimeMinutes}m`,
+      `🗄️ DB version: v${dbVersionRow?.user_version ?? 0}`,
+      `🧠 Memories: ${memoryCountRow?.total ?? 0} | Slots: ${slotCountRow?.total ?? 0} | Embeddings: ${embeddingCountRow?.total ?? 0}`,
+      `🤖 Requêtes IA (24h): ${aiStatsRow?.total ?? 0} | Erreurs: ${aiStatsRow?.failed ?? 0} | Avg latence: ${Math.round(aiStatsRow?.avg_latency || 0)}ms`,
+      `🔁 Fallbacks (24h): ${aiStatsRow?.fallback_count ?? 0}`,
+      `⚠️ Actions sensibles en attente: ${activePendingActions}`,
+      `🕒 Dernière requête IA: ${aiStatsRow?.last_request_at || 'aucune'}`
+    ].join('\n');
+
+    await interaction.reply({
+      content: `**Diagnostic système**\n${summary}`,
+      ephemeral: true
+    });
   } catch (error) {
-    console.error('Erreur /model:', error);
-    await interaction.reply({ content: `Erreur: ${error.message}`, ephemeral: true });
+    await interaction.reply({
+      content: `❌ Diagnostic impossible: ${error.message}`,
+      ephemeral: true
+    });
   }
 }
 
@@ -2925,35 +3315,69 @@ client.on('messageCreate', async (message) => {
     return;
   }
 
-  // Met à jour le profil membre et les infos serveur
-  await upsertMemberProfile(message.guild, message);
-  await upsertServerInfo(message.guild);
+  // Met à jour le profil membre et les infos serveur (throttled + non-blocking)
+  const now = Date.now();
+  const guildId = message.guild.id;
+  const profileKey = `${guildId}:${message.author.id}`;
+  const lastMemberUpsert = memberProfileUpsertAt.get(profileKey) || 0;
+  if (now - lastMemberUpsert >= MEMBER_PROFILE_UPSERT_MS) {
+    memberProfileUpsertAt.set(profileKey, now);
+    void upsertMemberProfile(message.guild, message);
+  }
+
+  const lastServerUpsert = serverInfoUpsertAt.get(guildId) || 0;
+  if (now - lastServerUpsert >= SERVER_INFO_UPSERT_MS) {
+    serverInfoUpsertAt.set(guildId, now);
+    void upsertServerInfo(message.guild);
+  }
 
   // Handle AI Assistant in dedicated channel or its threads
-  // Check database first, fallback to env var
-  let assistantChannelId = config.assistantChannelId;
-  try {
-    const dbConfig = await getQuery('SELECT channel_id FROM channel_config WHERE feature = ? AND enabled = 1', ['assistant']);
-    if (dbConfig && dbConfig.channel_id) {
-      assistantChannelId = dbConfig.channel_id;
-    }
-  } catch (err) {
-    // Fallback to env var
-  }
+  const assistantChannelId = await getChannelForFeature('assistant', 'assistantChannelId', config);
 
   const isAssistantContext = assistantChannelId && (
     message.channelId === assistantChannelId ||
     (message.channel.isThread && message.channel.parentId === assistantChannelId)
   );
 
-  if (isAssistantContext) {
-    // Regular AI assistant response
-    await handleAIAssistant(message);
+  const handledSupport = await handleSupportCommand(message);
+  if (handledSupport) {
     return;
   }
 
-  const handledSupport = await handleSupportCommand(message);
-  if (handledSupport) {
+  if (isAssistantContext) {
+    if (message.author.id === config.creatorId) {
+      const pendingKey = createPendingActionKey(message.guild.id, message.channelId, message.author.id);
+      const pendingAction = pendingAssistantActions.get(pendingKey);
+
+      if (pendingAction) {
+        if (pendingAction.expiresAt <= Date.now()) {
+          pendingAssistantActions.delete(pendingKey);
+          await message.channel.send('⏱️ Confirmation expirée. Action annulée.');
+          return;
+        }
+
+        const confirmMatch = message.content.trim().match(/^confirm\s+([A-Z0-9]{4,10})$/i);
+        if (confirmMatch) {
+          const providedToken = confirmMatch[1].toUpperCase();
+          if (providedToken === pendingAction.token) {
+            pendingAssistantActions.delete(pendingKey);
+            await executePendingAssistantAction(message, pendingAction);
+          } else {
+            await message.channel.send('❌ Token invalide.');
+          }
+          return;
+        }
+
+        if (/^cancel$/i.test(message.content.trim())) {
+          pendingAssistantActions.delete(pendingKey);
+          await message.channel.send('✅ Action sensible annulée.');
+          return;
+        }
+      }
+    }
+
+    // Regular AI assistant response
+    await handleAIAssistant(message);
     return;
   }
 
@@ -3007,312 +3431,7 @@ client.once('clientReady', async () => {
 
   // Register slash commands
   try {
-    // Build commands array
-    const commands = [
-      new SlashCommandBuilder()
-        .setName('ping')
-        .setDescription('Vérifier que le bot fonctionne'),
-        new SlashCommandBuilder()
-          .setName('story')
-          .setDescription('Gestionnaire d\'histoires collaboratives')
-          .addSubcommand(sub =>
-            sub.setName('start')
-              .setDescription('Lancer une nouvelle histoire')
-              .addStringOption(opt => opt.setName('theme').setDescription('Thème de l\'histoire').setRequired(true))
-              .addStringOption(opt =>
-                opt.setName('mode')
-                  .setDescription('Mode: classic ou roleplay')
-                  .setChoices({ name: 'Classique', value: 'classic' }, { name: 'Roleplay', value: 'roleplay' })
-                  .setRequired(false)
-              )
-          )
-          .addSubcommand(sub =>
-            sub.setName('join')
-              .setDescription('[Roleplay] S\'enregistrer avec un rôle')
-              .addStringOption(opt => opt.setName('role').setDescription('Nom de votre rôle/personnage').setRequired(true))
-          )
-          .addSubcommand(sub =>
-            sub.setName('ready')
-              .setDescription('[Roleplay] Lancer la partie après les inscriptions')
-          )
-          .addSubcommand(sub =>
-            sub.setName('end')
-              .setDescription('Terminer l\'histoire actuelle')
-          )
-      ];
-
-      // Ajouter la commande /clear
-      commands.push(
-        new SlashCommandBuilder()
-          .setName('clear')
-          .setDescription('Supprimer des messages dans le salon')
-          .addIntegerOption(opt =>
-            opt.setName('nombre')
-              .setDescription('Nombre de messages à supprimer (1-100)')
-              .setRequired(true)
-              .setMinValue(1)
-              .setMaxValue(100)
-          )
-      );
-
-      // Ajouter la commande /roast
-      commands.push(
-        new SlashCommandBuilder()
-          .setName('roast')
-          .setDescription('Insulter quelqu\'un de façon hilarante')
-          .addUserOption(opt =>
-            opt.setName('cible')
-              .setDescription('La personne à insulter')
-              .setRequired(true)
-          )
-      );
-
-      // Ajouter la commande /versusai
-      commands.push(
-        new SlashCommandBuilder()
-          .setName('versusai')
-          .setDescription('OpenAI vs Grok débattent un sujet')
-          .addStringOption(opt =>
-            opt.setName('sujet')
-              .setDescription('Le sujet à débattre')
-              .setRequired(true)
-          )
-      );
-
-      // Ajouter la commande /debate-respond
-      commands.push(
-        new SlashCommandBuilder()
-          .setName('debate-respond')
-          .setDescription('Propose un argument et déclenche un débat des 2 IAs')
-          .addStringOption(opt =>
-            opt.setName('argument')
-              .setDescription('Ton argument à débattre')
-              .setRequired(true)
-          )
-      );
-
-      // Ajouter la commande /debate-respond-grok
-      commands.push(
-        new SlashCommandBuilder()
-          .setName('debate-respond-grok')
-          .setDescription('Attaque Grok avec un argument')
-          .addStringOption(opt =>
-            opt.setName('argument')
-              .setDescription('Ton argument contre Grok')
-              .setRequired(true)
-          )
-      );
-
-      // Ajouter la commande /debate-respond-openai
-      commands.push(
-        new SlashCommandBuilder()
-          .setName('debate-respond-openai')
-          .setDescription('Attaque OpenAI avec un argument')
-          .addStringOption(opt =>
-            opt.setName('argument')
-              .setDescription('Ton argument contre OpenAI')
-              .setRequired(true)
-          )
-      );
-
-      // Ajouter la commande /model (forcer un modèle spécifique)
-      commands.push(
-        new SlashCommandBuilder()
-          .setName('model')
-          .setDescription('🤖 Forcer l\'utilisation d\'un modèle IA spécifique pour la prochaine réponse')
-          .addStringOption(opt =>
-            opt.setName('choice')
-              .setDescription('Modèle à utiliser')
-              .addChoices(
-                { name: 'Opus (perfection)', value: 'opus' },
-                { name: 'Sonnet (équilibré)', value: 'sonnet' },
-                { name: 'Gemini (vision/long)', value: 'gemini' },
-                { name: 'Mistral (rapide)', value: 'mistral' },
-                { name: 'Perplexity (web)', value: 'perplexity' },
-                { name: 'Auto (routage intelligent)', value: 'auto' }
-              )
-              .setRequired(true)
-          )
-      );
-
-      // Ajouter la commande /preferences (préférences utilisateur)
-      commands.push(
-        new SlashCommandBuilder()
-          .setName('preferences')
-          .setDescription('⚙️ Gérer vos préférences personnelles')
-          .addSubcommand(sub =>
-            sub.setName('view')
-              .setDescription('Voir vos préférences actuelles')
-          )
-          .addSubcommand(sub =>
-            sub.setName('model')
-              .setDescription('Choisir votre modèle IA préféré')
-              .addStringOption(opt =>
-                opt.setName('choice')
-                  .setDescription('Modèle IA à utiliser par défaut')
-                  .addChoices(
-                    { name: 'Auto (routage intelligent)', value: 'auto' },
-                    { name: 'Claude Opus (perfection)', value: 'opus' },
-                    { name: 'Claude Sonnet (équilibré)', value: 'sonnet' },
-                    { name: 'Gemini (vision/long)', value: 'gemini' },
-                    { name: 'Mistral (rapide)', value: 'mistral' },
-                    { name: 'Perplexity (web)', value: 'perplexity' }
-                  )
-                  .setRequired(true)
-              )
-          )
-          .addSubcommand(sub =>
-            sub.setName('style')
-              .setDescription('Choisir le style de réponse')
-              .addStringOption(opt =>
-                opt.setName('choice')
-                  .setDescription('Style de réponse préféré')
-                  .addChoices(
-                    { name: 'Normal', value: 'normal' },
-                    { name: 'Concis (2-3 lignes max)', value: 'concis' },
-                    { name: 'Détaillé', value: 'detaille' },
-                    { name: 'Drôle/Sarcastique', value: 'drole' }
-                  )
-                  .setRequired(true)
-              )
-          )
-          .addSubcommand(sub =>
-            sub.setName('language')
-              .setDescription('Choisir votre langue préférée')
-              .addStringOption(opt =>
-                opt.setName('choice')
-                  .setDescription('Langue de réponse')
-                  .addChoices(
-                    { name: 'Français', value: 'fr' },
-                    { name: 'English', value: 'en' },
-                    { name: 'Español', value: 'es' }
-                  )
-                  .setRequired(true)
-              )
-          )
-          .addSubcommand(sub =>
-            sub.setName('reset')
-              .setDescription('Réinitialiser toutes vos préférences')
-          )
-      );
-
-      // Ajouter la commande /config (gérer les channels des features)
-      commands.push(
-        new SlashCommandBuilder()
-          .setName('config')
-          .setDescription('⚙️ Configurer les channels pour chaque fonctionnalité (creator only)')
-          .addSubcommand(sub =>
-            sub.setName('list')
-              .setDescription('Lister tous les channels configurés')
-          )
-          .addSubcommand(sub =>
-            sub.setName('set')
-              .setDescription('Assigner un channel à une fonctionnalité')
-              .addStringOption(opt =>
-                opt.setName('feature')
-                  .setDescription('Fonctionnalité à configurer')
-                  .addChoices(
-                    { name: 'AI Assistant', value: 'assistant' },
-                    { name: 'Counting', value: 'counting' },
-                    { name: 'Confession', value: 'confession' },
-                    { name: 'Story Library', value: 'story_library' },
-                    { name: 'Thread Auto-Create', value: 'thread_create' },
-                    { name: 'Word Game', value: 'word_game' },
-                    { name: 'Quiz', value: 'quiz' },
-                    { name: 'Error Logs', value: 'error_logs' }
-                  )
-                  .setRequired(true)
-              )
-              .addChannelOption(opt =>
-                opt.setName('channel')
-                  .setDescription('Channel à utiliser')
-                  .setRequired(true)
-              )
-          )
-          .addSubcommand(sub =>
-            sub.setName('remove')
-              .setDescription('Supprimer la configuration d\'une fonctionnalité')
-              .addStringOption(opt =>
-                opt.setName('feature')
-                  .setDescription('Fonctionnalité à supprimer')
-                  .addChoices(
-                    { name: 'AI Assistant', value: 'assistant' },
-                    { name: 'Counting', value: 'counting' },
-                    { name: 'Confession', value: 'confession' },
-                    { name: 'Story Library', value: 'story_library' },
-                    { name: 'Thread Auto-Create', value: 'thread_create' },
-                    { name: 'Word Game', value: 'word_game' },
-                    { name: 'Quiz', value: 'quiz' },
-                    { name: 'Error Logs', value: 'error_logs' }
-                  )
-                  .setRequired(true)
-              )
-          )
-      );
-
-      // Ajouter la commande /maintenance (activer/désactiver blocage jeux)
-      commands.push(
-        new SlashCommandBuilder()
-          .setName('maintenance')
-          .setDescription('🛠️ Activer ou désactiver la maintenance des jeux')
-          .addStringOption(opt =>
-            opt.setName('action')
-              .setDescription('Action de maintenance')
-              .addChoices(
-                { name: 'Activer', value: 'on' },
-                { name: 'Désactiver', value: 'off' },
-                { name: 'Statut', value: 'status' }
-              )
-              .setRequired(true)
-          )
-          .addStringOption(opt =>
-            opt.setName('message')
-              .setDescription('Message provisoire (optionnel, utilisé avec action=on)')
-              .setRequired(false)
-              .setMaxLength(500)
-          )
-      );
-
-      // Ajouter la commande /parler (envoyer un message via le bot)
-      commands.push(
-        new SlashCommandBuilder()
-          .setName('parler')
-          .setDescription('🕶️ Envoyer un message via M-Yra (creator only)')
-          .addStringOption(opt =>
-            opt.setName('message')
-              .setDescription('Message à envoyer')
-              .setRequired(true)
-              .setMaxLength(1900)
-          )
-          .addChannelOption(opt =>
-            opt.setName('channel')
-              .setDescription('Salon cible (optionnel)')
-              .setRequired(false)
-          )
-      );
-
-      // Ajouter la commande /automod-simple (règle mot-clé minimale)
-      commands.push(
-        new SlashCommandBuilder()
-          .setName('automod-simple')
-          .setDescription('🛡️ Gérer une règle AutoMod simple (creator only)')
-          .addStringOption(opt =>
-            opt.setName('action')
-              .setDescription('Action à exécuter')
-              .addChoices(
-                { name: 'Activer/Mettre à jour', value: 'setup' },
-                { name: 'Désactiver', value: 'off' },
-                { name: 'Statut', value: 'status' }
-              )
-              .setRequired(true)
-          )
-          .addStringOption(opt =>
-            opt.setName('mot')
-              .setDescription('Mot-clé à bloquer (requis pour setup)')
-              .setRequired(false)
-              .setMaxLength(60)
-          )
-      );
+    const commands = buildSlashCommands();
 
     // Register commands globally (available on all servers)
     // Note: Global commands take ~1 hour to propagate
@@ -3327,217 +3446,29 @@ client.on('interactionCreate', async (interaction) => {
   // Handle slash commands
   if (interaction.isChatInputCommand()) {
     try {
-      const { commandName, options } = interaction;
-
-      if (commandName === 'ping') {
-        await interaction.reply(`🏓 Pong! Latence: ${client.ws.ping}ms`);
-        return;
-      }
-
-      if (commandName === 'clear') {
-        await handleClearCommand(interaction);
-        return;
-      }
-
-      if (commandName === 'roast') {
-        await handleRoastCommand(interaction);
-        return;
-      }
-
-      if (commandName === 'versusai') {
-        await handleVersusAiCommand(interaction);
-        return;
-      }
-
-      if (commandName === 'debate-respond') {
-        await handleDebateRespondCommand(interaction);
-        return;
-      }
-
-      if (commandName === 'debate-respond-grok') {
-        await handleDebateRespondGrokCommand(interaction);
-        return;
-      }
-
-      if (commandName === 'debate-respond-openai') {
-        await handleDebateRespondOpenaiCommand(interaction);
-        return;
-      }
-
-      if (commandName === 'model') {
-        await handleModelCommand(interaction);
-        return;
-      }
-
-      if (commandName === 'preferences') {
-        const subcommand = options.getSubcommand();
-        const userId = interaction.user.id;
-
-        if (subcommand === 'view') {
-          const prefs = await getQuery('SELECT * FROM user_preferences WHERE user_id = ?', [userId]);
-          
-          if (!prefs) {
-            await interaction.reply({ 
-              content: '📋 Vous n\'avez pas encore de préférences configurées.\nUtilisez `/preferences model`, `/preferences style` ou `/preferences language` pour commencer.', 
-              ephemeral: true 
-            });
-            return;
-          }
-
-          const embed = new EmbedBuilder()
-            .setTitle('⚙️ Vos Préférences')
-            .setColor(0x5865f2)
-            .addFields(
-              { name: '🤖 Modèle IA', value: prefs.ai_model_preference || 'Auto (routage intelligent)', inline: true },
-              { name: '💬 Style', value: prefs.response_style || 'Normal', inline: true },
-              { name: '🌐 Langue', value: prefs.language || 'Français', inline: true }
-            )
-            .setFooter({ text: 'Utilisez /preferences pour modifier' })
-            .setTimestamp();
-
-          await interaction.reply({ embeds: [embed], ephemeral: true });
-        } else if (subcommand === 'model') {
-          const choice = options.getString('choice');
-          const now = new Date().toISOString();
-          
-          await runQuery(
-            'INSERT INTO user_preferences (user_id, ai_model_preference, created_at, updated_at) VALUES (?, ?, ?, ?) ON CONFLICT(user_id) DO UPDATE SET ai_model_preference = ?, updated_at = ?',
-            [userId, choice, now, now, choice, now]
-          );
-
-          await interaction.reply({ 
-            content: `✅ Modèle IA défini sur **${choice}**`, 
-            ephemeral: true 
-          });
-        } else if (subcommand === 'style') {
-          const choice = options.getString('choice');
-          const now = new Date().toISOString();
-          
-          await runQuery(
-            'INSERT INTO user_preferences (user_id, response_style, created_at, updated_at) VALUES (?, ?, ?, ?) ON CONFLICT(user_id) DO UPDATE SET response_style = ?, updated_at = ?',
-            [userId, choice, now, now, choice, now]
-          );
-
-          await interaction.reply({ 
-            content: `✅ Style de réponse défini sur **${choice}**`, 
-            ephemeral: true 
-          });
-        } else if (subcommand === 'language') {
-          const choice = options.getString('choice');
-          const now = new Date().toISOString();
-          
-          await runQuery(
-            'INSERT INTO user_preferences (user_id, language, created_at, updated_at) VALUES (?, ?, ?, ?) ON CONFLICT(user_id) DO UPDATE SET language = ?, updated_at = ?',
-            [userId, choice, now, now, choice, now]
-          );
-
-          await interaction.reply({ 
-            content: `✅ Langue définie sur **${choice}**`, 
-            ephemeral: true 
-          });
-        } else if (subcommand === 'reset') {
-          await runQuery('DELETE FROM user_preferences WHERE user_id = ?', [userId]);
-          await interaction.reply({ 
-            content: '🔄 Vos préférences ont été réinitialisées.', 
-            ephemeral: true 
-          });
+      await dispatchChatInputCommand(interaction, {
+        client,
+        config,
+        handlers: {
+          handleClearCommand,
+          handleRoastCommand,
+          handleVersusAiCommand,
+          handleDebateRespondCommand,
+          handleDebateRespondGrokCommand,
+          handleDebateRespondOpenaiCommand,
+          handleModelCommand,
+          handlePreferencesCommand,
+          handleConfigCommand,
+          handleMaintenanceCommand,
+          handleDiagnosticCommand,
+          handleParlerCommand,
+          handleAutoModSimpleCommand,
+          handleStorySlashStart,
+          handleStorySlashJoin,
+          handleStorySlashReady,
+          handleStorySlashEnd
         }
-        return;
-      }
-
-      if (commandName === 'config') {
-        // Only allow creator
-        if (interaction.user.id !== config.creatorId) {
-          await interaction.reply({ content: '❌ Seul le créateur peut configurer les channels.', ephemeral: true });
-          return;
-        }
-
-        const subcommand = options.getSubcommand();
-
-        if (subcommand === 'list') {
-          // Afficher tous les channels configurés
-          const configuredFeatures = await allQuery('SELECT feature, channel_id, enabled, updated_at FROM channel_config ORDER BY feature');
-          
-          if (configuredFeatures.length === 0) {
-            await interaction.reply({ content: '📭 Aucune configuration trouvée.', ephemeral: true });
-            return;
-          }
-
-          let list = '⚙️ **Configurations actuelles:**\n';
-          for (const feat of configuredFeatures) {
-            const channel = await client.channels.fetch(feat.channel_id).catch(() => null);
-            const channelName = channel ? `<#${feat.channel_id}>` : `*deleted*`;
-            const status = feat.enabled ? '✅' : '❌';
-            list += `${status} **${feat.feature}**: ${channelName} (${new Date(feat.updated_at).toLocaleDateString('fr-FR')})\n`;
-          }
-
-          await interaction.reply({ content: list, ephemeral: true });
-        } else if (subcommand === 'set') {
-          const feature = options.getString('feature');
-          const channel = options.getChannel('channel');
-
-          if (!channel) {
-            await interaction.reply({ content: '❌ Channel introuvable.', ephemeral: true });
-            return;
-          }
-
-          const now = new Date().toISOString();
-          await runQuery(
-            'INSERT INTO channel_config (feature, channel_id, enabled, created_at, updated_at) VALUES (?, ?, 1, ?, ?) ON CONFLICT(feature) DO UPDATE SET channel_id = ?, enabled = 1, updated_at = ?',
-            [feature, channel.id, now, now, channel.id, now]
-          );
-
-          await interaction.reply({
-            content: `✅ **${feature}** configuré → <#${channel.id}>`,
-            ephemeral: true
-          });
-        } else if (subcommand === 'remove') {
-          const feature = options.getString('feature');
-
-          const config_row = await getQuery('SELECT * FROM channel_config WHERE feature = ?', [feature]);
-          if (!config_row) {
-            await interaction.reply({ content: `❌ **${feature}** n'est pas configurée.`, ephemeral: true });
-            return;
-          }
-
-          await runQuery('DELETE FROM channel_config WHERE feature = ?', [feature]);
-
-          await interaction.reply({
-            content: `🗑️ **${feature}** a été supprimée.`,
-            ephemeral: true
-          });
-        }
-        return;
-      }
-
-      if (commandName === 'maintenance') {
-        await handleMaintenanceCommand(interaction);
-        return;
-      }
-
-      if (commandName === 'parler') {
-        await handleParlerCommand(interaction);
-        return;
-      }
-
-      if (commandName === 'automod-simple') {
-        await handleAutoModSimpleCommand(interaction);
-        return;
-      }
-
-      if (commandName === 'story') {
-        const subcommand = options.getSubcommand();
-
-        if (subcommand === 'start') {
-          await handleStorySlashStart(interaction);
-        } else if (subcommand === 'join') {
-          await handleStorySlashJoin(interaction);
-        } else if (subcommand === 'ready') {
-          await handleStorySlashReady(interaction);
-        } else if (subcommand === 'end') {
-          await handleStorySlashEnd(interaction);
-        }
-      }
+      });
     } catch (err) {
       console.error('❌ Erreur slash command:', err);
       try {

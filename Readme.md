@@ -28,6 +28,7 @@ npm start
 ## Environment Variables
 
 Copy `.env.example` to `.env` and fill in:
+
 - Discord bot token
 - AI API keys (Claude, OpenAI, Mistral, Grok, Perplexity, Gemini)
 - Database paths

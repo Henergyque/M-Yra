@@ -6,6 +6,8 @@ import { Logger } from './utils/logger.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
+const runtimeEntry = process.argv[1] || '';
+const isDatabaseUtilityRuntime = /src[\\/]+database[\\/]+[^\\/]+\.js$/i.test(runtimeEntry);
 
 // Load environment variables from .env file
 const envFile = process.env.NODE_ENV === 'production' ? '.env.prod' : '.env';
@@ -26,6 +28,9 @@ const logger = new Logger('CONFIG');
 function requireEnv(key) {
   const value = process.env[key];
   if (!value) {
+    if (isDatabaseUtilityRuntime) {
+      return '';
+    }
     logger.critical(`Missing required environment variable: ${key}`);
     throw new Error(`❌ Missing required env: ${key}`);
   }
@@ -80,6 +85,8 @@ export const config = {
     grokMaxReqPerDay: parseInt(process.env.GROK_MAX_REQ_PER_DAY || '10000'),
     openaiMaxReqPerMin: parseInt(process.env.OPENAI_MAX_REQ_PER_MIN || '60')
   },
+
+  assistantConversationCooldownMinutes: parseInt(process.env.ASSISTANT_CONVERSATION_COOLDOWN_MINUTES || '90'),
 
   // === SYSTEM ===
   environment: process.env.NODE_ENV || 'development',

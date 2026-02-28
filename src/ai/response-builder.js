@@ -146,7 +146,7 @@ export class AIResponseBuilder {
   // ==================== CLAUDE ====================
   async executeClaudeRequest(model, message, options, breaker, timeout) {
     const { system, maxTokens, temperature } = options;
-    const claudeModel = model === 'opus' ? 'claude-opus-4-5-20251101' : 'claude-sonnet-4-5-20250929';
+    const claudeModel = model === 'opus' ? 'claude-opus-4-6' : 'claude-sonnet-4-5-20250929';
 
     return breaker.execute(
       async () => {

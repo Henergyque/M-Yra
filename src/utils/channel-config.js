@@ -3,7 +3,11 @@
  * Manages which channels are configured for different features
  */
 
-import { getQuery, runQuery } from '../db.js';
+import { allQuery, getQuery, runQuery } from '../db.js';
+import { Logger } from './logger.js';
+import { invalidateChannelFeatureCache } from './channel-helper.js';
+
+const logger = new Logger('CHANNEL-CONFIG');
 
 /**
  * Get configured channel for a feature
@@ -28,7 +32,20 @@ export async function getChannelConfig(feature, defaultEnvKey = null, config = n
 
     return null;
   } catch (err) {
-    console.error(`❌ Erreur lecture channel_config pour ${feature}:`, err);
+    logger.error(`Erreur lecture channel_config pour ${feature}`, {
+      error: err.message
+    });
+    return null;
+  }
+}
+
+export async function getStoredChannelConfig(feature) {
+  try {
+    return await getQuery('SELECT feature, channel_id, enabled, updated_at FROM channel_config WHERE feature = ?', [feature]);
+  } catch (err) {
+    logger.error(`Erreur lecture channel_config brut pour ${feature}`, {
+      error: err.message
+    });
     return null;
   }
 }
@@ -43,9 +60,12 @@ export async function setChannelConfig(feature, channelId) {
       'INSERT INTO channel_config (feature, channel_id, enabled, created_at, updated_at) VALUES (?, ?, 1, ?, ?) ON CONFLICT(feature) DO UPDATE SET channel_id = ?, enabled = 1, updated_at = ?',
       [feature, channelId, now, now, channelId, now]
     );
+    invalidateChannelFeatureCache(feature);
     return true;
   } catch (err) {
-    console.error(`❌ Erreur écriture channel_config pour ${feature}:`, err);
+    logger.error(`Erreur écriture channel_config pour ${feature}`, {
+      error: err.message
+    });
     return false;
   }
 }
@@ -60,9 +80,12 @@ export async function disableChannelConfig(feature) {
       'INSERT INTO channel_config (feature, channel_id, enabled, created_at, updated_at) VALUES (?, ?, 0, ?, ?) ON CONFLICT(feature) DO UPDATE SET enabled = 0, updated_at = ?',
       [feature, '', now, now, now]
     );
+    invalidateChannelFeatureCache(feature);
     return true;
   } catch (err) {
-    console.error(`❌ Erreur désactivation channel_config pour ${feature}:`, err);
+    logger.error(`Erreur désactivation channel_config pour ${feature}`, {
+      error: err.message
+    });
     return false;
   }
 }
@@ -70,14 +93,30 @@ export async function disableChannelConfig(feature) {
 /**
  * Get all configurations
  */
-export async function getAllChannelConfigs() {
+export async function getAllChannelConfigs(includeDisabled = true) {
   try {
-    const rows = await getQuery(
-      'SELECT feature, channel_id, enabled FROM channel_config WHERE enabled = 1'
-    );
+    const sql = includeDisabled
+      ? 'SELECT feature, channel_id, enabled, updated_at FROM channel_config ORDER BY feature'
+      : 'SELECT feature, channel_id, enabled, updated_at FROM channel_config WHERE enabled = 1 ORDER BY feature';
+    const rows = await allQuery(sql);
     return rows || [];
   } catch (err) {
-    console.error('❌ Erreur lecture all channel_configs:', err);
+    logger.error('Erreur lecture all channel_configs', {
+      error: err.message
+    });
     return [];
+  }
+}
+
+export async function removeChannelConfig(feature) {
+  try {
+    await runQuery('DELETE FROM channel_config WHERE feature = ?', [feature]);
+    invalidateChannelFeatureCache(feature);
+    return true;
+  } catch (err) {
+    logger.error(`Erreur suppression channel_config pour ${feature}`, {
+      error: err.message
+    });
+    return false;
   }
 }

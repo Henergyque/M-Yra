@@ -3,6 +3,13 @@ import { dbPath } from './config.js';
 
 const db = new sqlite3.Database(dbPath);
 
+db.serialize(() => {
+  db.run('PRAGMA journal_mode = WAL');
+  db.run('PRAGMA synchronous = NORMAL');
+  db.run('PRAGMA temp_store = MEMORY');
+  db.run('PRAGMA foreign_keys = ON');
+});
+
 function runQuery(sql, params = []) {
   return new Promise((resolve, reject) => {
     db.run(sql, params, function onRun(error) {
@@ -389,12 +396,58 @@ async function initializeDatabase() {
     )
   `);
 
+  await runQuery(`
+    CREATE TABLE IF NOT EXISTS user_memory_slots (
+      user_id TEXT PRIMARY KEY,
+      objective TEXT,
+      pro_context TEXT,
+      preferences TEXT,
+      constraints TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    )
+  `);
+
+  await runQuery(`
+    CREATE TABLE IF NOT EXISTS memory_embeddings (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      memory_id INTEGER,
+      user_id TEXT,
+      memory_type TEXT NOT NULL,
+      source_text TEXT NOT NULL,
+      embedding TEXT NOT NULL,
+      created_at TEXT NOT NULL
+    )
+  `);
+
+  await runQuery(`
+    CREATE TABLE IF NOT EXISTS ai_request_logs (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_id TEXT,
+      channel_id TEXT,
+      model TEXT,
+      route TEXT,
+      latency_ms INTEGER,
+      success INTEGER DEFAULT 1,
+      fallback_used INTEGER DEFAULT 0,
+      prompt_chars INTEGER,
+      response_chars INTEGER,
+      estimated_tokens INTEGER,
+      error_message TEXT,
+      created_at TEXT NOT NULL
+    )
+  `);
+
   // Indexes pour performance ultra-rapide
   await runQuery(`CREATE INDEX IF NOT EXISTS idx_observations_model ON brain_observations(model, created_at DESC)`);
   await runQuery(`CREATE INDEX IF NOT EXISTS idx_patterns_model_user ON brain_member_patterns(model, user_id)`);
   await runQuery(`CREATE INDEX IF NOT EXISTS idx_relationships_users ON brain_relationships(model, user_a, user_b)`);
   await runQuery(`CREATE INDEX IF NOT EXISTS idx_performance_model ON ai_performance(model, created_at DESC)`);
   await runQuery(`CREATE INDEX IF NOT EXISTS idx_events_model ON brain_events(model, created_at DESC)`);
+  await runQuery(`CREATE INDEX IF NOT EXISTS idx_memory_embeddings_user_type ON memory_embeddings(user_id, memory_type, created_at DESC)`);
+  await runQuery(`CREATE INDEX IF NOT EXISTS idx_memory_embeddings_memory_id ON memory_embeddings(memory_id)`);
+  await runQuery(`CREATE INDEX IF NOT EXISTS idx_ai_request_logs_date ON ai_request_logs(created_at DESC)`);
+  await runQuery(`CREATE INDEX IF NOT EXISTS idx_ai_request_logs_model_date ON ai_request_logs(model, created_at DESC)`);
 
   // Migration: Add missing columns to existing table
   try {

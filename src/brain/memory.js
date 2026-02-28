@@ -1,22 +1,112 @@
 import { runQuery, getQuery, allQuery } from '../db.js';
 
-// Memories CRUD
-async function addMemory(type, content, createdBy, subject = null, userId = null) {
+const EMBEDDING_DIM = 64;
+
+function tokenize(text) {
+  return String(text || '')
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^a-z0-9\s]/g, ' ')
+    .split(/\s+/)
+    .filter(token => token.length >= 3)
+    .slice(0, 200);
+}
+
+function hashToken(token) {
+  let hash = 2166136261;
+  for (let index = 0; index < token.length; index += 1) {
+    hash ^= token.charCodeAt(index);
+    hash = Math.imul(hash, 16777619);
+  }
+  return Math.abs(hash);
+}
+
+function buildSemanticVector(text) {
+  const vector = Array.from({ length: EMBEDDING_DIM }, () => 0);
+  const tokens = tokenize(text);
+  if (tokens.length === 0) return vector;
+
+  for (const token of tokens) {
+    const hash = hashToken(token);
+    const position = hash % EMBEDDING_DIM;
+    const sign = (hash & 1) === 0 ? 1 : -1;
+    vector[position] += sign;
+  }
+
+  const norm = Math.sqrt(vector.reduce((sum, value) => sum + value * value, 0)) || 1;
+  return vector.map(value => value / norm);
+}
+
+function cosineSimilarity(vectorA, vectorB) {
+  if (!Array.isArray(vectorA) || !Array.isArray(vectorB)) return 0;
+  if (vectorA.length !== vectorB.length || vectorA.length === 0) return 0;
+
+  let dot = 0;
+  for (let index = 0; index < vectorA.length; index += 1) {
+    dot += vectorA[index] * vectorB[index];
+  }
+  return dot;
+}
+
+async function upsertMemoryEmbedding(memoryId, userId, memoryType, sourceText) {
+  const normalizedText = String(sourceText || '').trim();
+  if (!normalizedText) return;
+
+  const embedding = buildSemanticVector(normalizedText);
+  const now = new Date().toISOString();
+
+  if (memoryId) {
+    await runQuery(
+      `DELETE FROM memory_embeddings WHERE memory_id = ?`,
+      [memoryId]
+    );
+  }
+
   await runQuery(
-    'INSERT INTO memories (type, subject, user_id, content, created_at, created_by) VALUES (?, ?, ?, ?, ?, ?)',
-    [type, subject, userId, content, new Date().toISOString(), createdBy]
+    `INSERT INTO memory_embeddings (memory_id, user_id, memory_type, source_text, embedding, created_at)
+     VALUES (?, ?, ?, ?, ?, ?)`,
+    [memoryId || null, userId || null, memoryType || 'memory', normalizedText, JSON.stringify(embedding), now]
   );
 }
 
-async function getMemoriesForUser(userId, limit = 50) {
+// Memories CRUD
+async function addMemory(type, content, createdBy, subject = null, userId = null) {
+  const createdAt = new Date().toISOString();
+  const result = await runQuery(
+    'INSERT INTO memories (type, subject, user_id, content, created_at, created_by) VALUES (?, ?, ?, ?, ?, ?)',
+    [type, subject, userId, content, createdAt, createdBy]
+  );
+
+  if (!['conversation', 'vanne'].includes(type)) {
+    await upsertMemoryEmbedding(result.lastID, userId, type, `${subject || ''} ${content}`.trim());
+  }
+
+  return result?.lastID || null;
+}
+
+async function getMemoriesForUser(userId, limit = 50, options = {}) {
+  const { maxAgeDays = null } = options;
+  const params = [userId];
+  let sql = "SELECT * FROM memories WHERE user_id = ? AND type NOT IN ('conversation','vanne')";
+
+  if (typeof maxAgeDays === 'number' && maxAgeDays > 0) {
+    const cutoff = new Date(Date.now() - maxAgeDays * 24 * 60 * 60 * 1000).toISOString();
+    sql += ' AND created_at >= ?';
+    params.push(cutoff);
+  }
+
+  sql += ' ORDER BY created_at DESC LIMIT ?';
+  params.push(limit);
+
   return await allQuery(
-    "SELECT * FROM memories WHERE user_id = ? AND type NOT IN ('conversation','vanne') ORDER BY created_at DESC LIMIT ?",
-    [userId, limit]
+    sql,
+    params
   );
 }
 
 async function searchMemories(keywords, options = {}) {
-  const { userId = null, limit = 100 } = options;
+  const { userId = null, limit = 100, maxAgeDays = null } = options;
   const terms = keywords.toLowerCase().split(/\s+/).filter(t => t.length > 2);
   if (terms.length === 0) return [];
 
@@ -28,6 +118,12 @@ async function searchMemories(keywords, options = {}) {
     params.push(userId);
   }
 
+  if (typeof maxAgeDays === 'number' && maxAgeDays > 0) {
+    const cutoff = new Date(Date.now() - maxAgeDays * 24 * 60 * 60 * 1000).toISOString();
+    sql += ' AND created_at >= ?';
+    params.push(cutoff);
+  }
+
   sql += ' ORDER BY created_at DESC LIMIT ?';
   params.push(limit);
 
@@ -36,6 +132,133 @@ async function searchMemories(keywords, options = {}) {
     const searchText = `${mem.subject || ''} ${mem.content}`.toLowerCase();
     return terms.some(term => searchText.includes(term));
   });
+}
+
+async function searchMemoriesSemantic(query, options = {}) {
+  const {
+    userId = null,
+    limit = 12,
+    minScore = 0.2,
+    maxAgeDays = 30
+  } = options;
+
+  const queryText = String(query || '').trim();
+  if (!queryText) return [];
+
+  const queryVector = buildSemanticVector(queryText);
+  const params = [];
+
+  let sql = `
+    SELECT me.memory_id, me.user_id, me.memory_type, me.source_text, me.embedding, me.created_at, m.subject, m.content, m.type
+    FROM memory_embeddings me
+    LEFT JOIN memories m ON m.id = me.memory_id
+    WHERE 1=1
+  `;
+
+  if (userId) {
+    sql += ' AND (me.user_id = ? OR me.user_id IS NULL)';
+    params.push(userId);
+  }
+
+  if (typeof maxAgeDays === 'number' && maxAgeDays > 0) {
+    const cutoff = new Date(Date.now() - maxAgeDays * 24 * 60 * 60 * 1000).toISOString();
+    sql += ' AND me.created_at >= ?';
+    params.push(cutoff);
+  }
+
+  sql += ' ORDER BY me.created_at DESC LIMIT 200';
+
+  const rows = await allQuery(sql, params);
+  const scored = rows
+    .map(row => {
+      try {
+        const vector = JSON.parse(row.embedding);
+        const score = cosineSimilarity(queryVector, vector);
+        return { row, score };
+      } catch {
+        return null;
+      }
+    })
+    .filter(Boolean)
+    .filter(item => item.score >= minScore)
+    .sort((a, b) => b.score - a.score)
+    .slice(0, limit)
+    .map(item => ({
+      ...item.row,
+      semantic_score: Number(item.score.toFixed(4))
+    }));
+
+  return scored;
+}
+
+async function upsertUserMemorySlot(userId, updates = {}) {
+  if (!userId) return;
+
+  const existing = await getQuery('SELECT * FROM user_memory_slots WHERE user_id = ?', [userId]);
+  const now = new Date().toISOString();
+
+  const nextData = {
+    objective: updates.objective ?? existing?.objective ?? null,
+    pro_context: updates.pro_context ?? existing?.pro_context ?? null,
+    preferences: updates.preferences ?? existing?.preferences ?? null,
+    constraints: updates.constraints ?? existing?.constraints ?? null
+  };
+
+  await runQuery(
+    `INSERT INTO user_memory_slots (user_id, objective, pro_context, preferences, constraints, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?)
+     ON CONFLICT(user_id) DO UPDATE SET
+       objective = excluded.objective,
+       pro_context = excluded.pro_context,
+       preferences = excluded.preferences,
+       constraints = excluded.constraints,
+       updated_at = excluded.updated_at`,
+    [userId, nextData.objective, nextData.pro_context, nextData.preferences, nextData.constraints, existing?.created_at || now, now]
+  );
+
+  const entries = Object.entries(nextData).filter(([, value]) => value && String(value).trim() !== '');
+  for (const [slotKey, slotValue] of entries) {
+    await upsertMemoryEmbedding(null, userId, `slot:${slotKey}`, `${slotKey} ${slotValue}`);
+  }
+}
+
+async function getUserMemorySlots(userId) {
+  if (!userId) return null;
+  return await getQuery('SELECT * FROM user_memory_slots WHERE user_id = ?', [userId]);
+}
+
+async function extractAndStoreMemorySlots(userId, userMessage) {
+  const text = String(userMessage || '').trim();
+  if (!userId || !text) return false;
+
+  const updates = {};
+
+  const objectiveMatch = text.match(/(?:mon\s+objectif|objectif\s*:|je\s+veux|mon\s+but)\s*(?:est\s+de\s+)?(.+)/i);
+  if (objectiveMatch && objectiveMatch[1]) {
+    updates.objective = objectiveMatch[1].trim().slice(0, 280);
+  }
+
+  const proMatch = text.match(/(?:je\s+suis|je\s+bosse\s+comme|je\s+travaille\s+comme|job\s*:|boulot\s*:|m[ée]tier\s*:)(.+)/i);
+  if (proMatch && proMatch[1]) {
+    updates.pro_context = proMatch[1].trim().slice(0, 280);
+  }
+
+  const preferenceMatch = text.match(/(?:je\s+pr[ée]f[èe]re|pr[ée]f[ée]rence\s*:|j'aime\s+bien|j'aime\s+pas)\s+(.+)/i);
+  if (preferenceMatch && preferenceMatch[1]) {
+    updates.preferences = preferenceMatch[1].trim().slice(0, 280);
+  }
+
+  const constraintMatch = text.match(/(?:je\s+peux\s+pas|je\s+n'ai\s+pas|contrainte\s*:|limite\s*:|pas\s+de\s+temps|pas\s+d'argent)\s+(.+)/i);
+  if (constraintMatch && constraintMatch[1]) {
+    updates.constraints = constraintMatch[1].trim().slice(0, 280);
+  }
+
+  if (Object.keys(updates).length === 0) {
+    return false;
+  }
+
+  await upsertUserMemorySlot(userId, updates);
+  return true;
 }
 
 async function getAllMemories(limit = 50) {
@@ -185,6 +408,7 @@ export {
   addMemory,
   getMemoriesForUser,
   searchMemories,
+  searchMemoriesSemantic,
   getAllMemories,
   deleteMemory,
   loadConversationHistory,
@@ -198,5 +422,9 @@ export {
   addRawObservation,
   setKnownMember,
   removeKnownMember,
-  listKnownMembers
+  listKnownMembers,
+  upsertMemoryEmbedding,
+  upsertUserMemorySlot,
+  getUserMemorySlots,
+  extractAndStoreMemorySlots
 };

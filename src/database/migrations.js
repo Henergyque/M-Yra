@@ -1,5 +1,6 @@
 import { Logger } from '../utils/logger.js';
-import { runQuery, getQuery } from './index.js';
+import { runQuery, getQuery, initializeDatabase } from '../db.js';
+import { fileURLToPath } from 'node:url';
 
 const logger = new Logger('DB-MIGRATIONS');
 
@@ -120,7 +121,7 @@ export const migrations = [
     version: 4,
     name: 'Add rate limit tracking',
     up: async () => {
-      logger.info('🔄 Migration 5: Adding rate limit tracking');
+      logger.info('🔄 Migration 4: Adding rate limit tracking');
       
       await runQuery(`
         CREATE TABLE IF NOT EXISTS rate_limit_logs (
@@ -139,11 +140,118 @@ export const migrations = [
         ON rate_limit_logs(model, created_at DESC)
       `);
 
+      logger.info('✅ Migration 4 complete');
+    },
+    down: async () => {
+      logger.warn('⬇️ Rolling back migration 4: dropping rate limit logs');
+      await runQuery('DROP TABLE IF EXISTS rate_limit_logs');
+    }
+  },
+
+  {
+    version: 5,
+    name: 'Add memory query indexes',
+    up: async () => {
+      logger.info('🔄 Migration 5: Adding memory query indexes');
+
+      await runQuery(`
+        CREATE INDEX IF NOT EXISTS idx_memories_type_user_created
+        ON memories(type, user_id, created_at DESC)
+      `);
+
+      await runQuery(`
+        CREATE INDEX IF NOT EXISTS idx_memories_user_type_created
+        ON memories(user_id, type, created_at DESC)
+      `);
+
       logger.info('✅ Migration 5 complete');
     },
     down: async () => {
-      logger.warn('⬇️ Rolling back migration 5: dropping rate limit logs');
-      await runQuery('DROP TABLE IF EXISTS rate_limit_logs');
+      logger.warn('⬇️ Rolling back migration 5: dropping memory indexes');
+      await runQuery('DROP INDEX IF EXISTS idx_memories_type_user_created');
+      await runQuery('DROP INDEX IF EXISTS idx_memories_user_type_created');
+    }
+  },
+
+  {
+    version: 6,
+    name: 'Add memory slots, embeddings and diagnostics logs',
+    up: async () => {
+      logger.info('🔄 Migration 6: Adding memory slots, embeddings and diagnostics logs');
+
+      await runQuery(`
+        CREATE TABLE IF NOT EXISTS user_memory_slots (
+          user_id TEXT PRIMARY KEY,
+          objective TEXT,
+          pro_context TEXT,
+          preferences TEXT,
+          constraints TEXT,
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL
+        )
+      `);
+
+      await runQuery(`
+        CREATE TABLE IF NOT EXISTS memory_embeddings (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          memory_id INTEGER,
+          user_id TEXT,
+          memory_type TEXT NOT NULL,
+          source_text TEXT NOT NULL,
+          embedding TEXT NOT NULL,
+          created_at TEXT NOT NULL
+        )
+      `);
+
+      await runQuery(`
+        CREATE TABLE IF NOT EXISTS ai_request_logs (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          user_id TEXT,
+          channel_id TEXT,
+          model TEXT,
+          route TEXT,
+          latency_ms INTEGER,
+          success INTEGER DEFAULT 1,
+          fallback_used INTEGER DEFAULT 0,
+          prompt_chars INTEGER,
+          response_chars INTEGER,
+          estimated_tokens INTEGER,
+          error_message TEXT,
+          created_at TEXT NOT NULL
+        )
+      `);
+
+      await runQuery(`
+        CREATE INDEX IF NOT EXISTS idx_memory_embeddings_user_type
+        ON memory_embeddings(user_id, memory_type, created_at DESC)
+      `);
+
+      await runQuery(`
+        CREATE INDEX IF NOT EXISTS idx_memory_embeddings_memory_id
+        ON memory_embeddings(memory_id)
+      `);
+
+      await runQuery(`
+        CREATE INDEX IF NOT EXISTS idx_ai_request_logs_date
+        ON ai_request_logs(created_at DESC)
+      `);
+
+      await runQuery(`
+        CREATE INDEX IF NOT EXISTS idx_ai_request_logs_model_date
+        ON ai_request_logs(model, created_at DESC)
+      `);
+
+      logger.info('✅ Migration 6 complete');
+    },
+    down: async () => {
+      logger.warn('⬇️ Rolling back migration 6: dropping memory slots, embeddings and diagnostics logs');
+      await runQuery('DROP INDEX IF EXISTS idx_memory_embeddings_user_type');
+      await runQuery('DROP INDEX IF EXISTS idx_memory_embeddings_memory_id');
+      await runQuery('DROP INDEX IF EXISTS idx_ai_request_logs_date');
+      await runQuery('DROP INDEX IF EXISTS idx_ai_request_logs_model_date');
+      await runQuery('DROP TABLE IF EXISTS ai_request_logs');
+      await runQuery('DROP TABLE IF EXISTS memory_embeddings');
+      await runQuery('DROP TABLE IF EXISTS user_memory_slots');
     }
   }
 ];
@@ -151,7 +259,7 @@ export const migrations = [
 /**
  * Run all pending migrations
  */
-export async function migrate(db) {
+export async function migrate() {
   try {
     // Get current version from database
     const result = await getQuery('PRAGMA user_version');
@@ -170,7 +278,6 @@ export async function migrate(db) {
           await runQuery(`PRAGMA user_version = ${migration.version}`);
           currentVersion = migration.version;
           migrated++;
-          logger.info(`✅ Migration ${migration.version} complete`);
         } catch (error) {
           logger.error(`❌ Migration ${migration.version} failed`, {
             migration: migration.name,
@@ -199,7 +306,7 @@ export async function migrate(db) {
 /**
  * Rollback to previous version (careful!)
  */
-export async function rollback(db, targetVersion) {
+export async function rollback(targetVersion) {
   try {
     const result = await getQuery('PRAGMA user_version');
     let currentVersion = result?.user_version || 0;
@@ -246,4 +353,25 @@ export async function getMigrationStatus() {
     logger.error('Failed to get migration status', { error: error.message });
     return null;
   }
+}
+
+const currentFilePath = fileURLToPath(import.meta.url);
+
+if (process.argv[1] === currentFilePath) {
+  (async () => {
+    try {
+      logger.info('Starting database initialization before migrations');
+      await initializeDatabase();
+      await migrate();
+      const status = await getMigrationStatus();
+      logger.info('Migration status', status ?? {});
+      process.exit(0);
+    } catch (error) {
+      logger.critical('Migration CLI failed', {
+        error: error.message,
+        stack: error.stack
+      });
+      process.exit(1);
+    }
+  })();
 }

@@ -11,7 +11,9 @@
     "test:watch": "jest --watch",
     "test:coverage": "jest --coverage",
     "lint": "eslint src/",
-    "db:migrate": "node src/database/migrations.js"
+    "db:migrate": "node src/database/migrations.js",
+    "db:reset-assistant-memory": "node src/database/reset-assistant-memory.js",
+    "db:reset-assistant-memory:dry": "set DRY_RUN=1&& node src/database/reset-assistant-memory.js"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.71.2",
