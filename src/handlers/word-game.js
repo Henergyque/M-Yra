@@ -1,9 +1,10 @@
-import { ChannelType, EmbedBuilder, ThreadAutoArchiveDuration } from 'discord.js';
+import { ChannelType, EmbedBuilder, ThreadAutoArchiveDuration, ActionRowBuilder, ButtonBuilder, ButtonStyle } from 'discord.js';
 import { config } from '../config.js';
 import { getQuery, runQuery, allQuery } from '../db.js';
 import { openai } from '../ai/clients.js';
 import { getChannelForFeature } from '../utils/channel-helper.js';
 import { sendMaintenanceNotice } from '../utils/maintenance.js';
+import { applyGenericGameModerationDecision, isWhitelisted } from '../services/game-moderation.js';
 
 const wordGameLocks = new Map();
 const validatedPairs = new Map();
@@ -162,17 +163,28 @@ async function clearWordHistory(channelId) {
 
 async function createWordGameErrorThread(message) {
   if (message.channel.type !== ChannelType.GuildText) {
-    return;
+    return null;
   }
 
   try {
-    await message.startThread({
+    const thread = await message.startThread({
       name: 'Discussion - Mot rejeté',
       autoArchiveDuration: ThreadAutoArchiveDuration.OneDay
     });
+    return thread;
   } catch (error) {
     // Ignore thread creation errors
+    return null;
   }
+}
+
+function createWordGameGageButtonRow(targetUserId) {
+  return new ActionRowBuilder().addComponents(
+    new ButtonBuilder()
+      .setCustomId(`gage:word-game:${targetUserId}`)
+      .setLabel('Gage donné')
+      .setStyle(ButtonStyle.Secondary)
+  );
 }
 
 export async function handleWordGame(message) {
@@ -260,7 +272,33 @@ export async function handleWordGame(message) {
       await setWordGameState(message.channel.id, null, null, 0);
       await clearWordHistory(message.channel.id);
       await message.react('❌');
-      await createWordGameErrorThread(message);
+      const errorThread = await createWordGameErrorThread(message);
+
+      let moderationText = 'ℹ️ Erreur probable, aucune chance retirée.';
+      const whitelisted = await isWhitelisted(message.guild.id, message.author.id);
+      if (!whitelisted) {
+        const decision = await applyGenericGameModerationDecision({
+          guildId: message.guild.id,
+          channelId: message.channel.id,
+          userId: message.author.id,
+          gameType: 'word_game',
+          details: {
+            currentWord,
+            submittedWord: userWord,
+            explanation,
+            channelStreak
+          }
+        });
+        moderationText = `🧠 Détection sabotage: **${decision.level}** (${Math.round(decision.confidence * 100)}%) — ${decision.reason}`;
+        if (decision.consumed > 0) {
+          moderationText += `\n⚠️ Chance utilisée: **${decision.chanceState.used}/2**.`;
+        }
+        if (decision.sanctioned) {
+          moderationText += '\n⛔ Sanction jeux activée.';
+        }
+      } else {
+        moderationText = '✅ Membre whitelisté: aucune chance retirée.';
+      }
 
       const errorEmbed = new EmbedBuilder()
         .setTitle('❌ Mot Rejeté')
@@ -268,12 +306,19 @@ export async function handleWordGame(message) {
           `**${userWord}** n'est pas suffisamment lié à **${currentWord}**.\n\n` +
           `**Raison :** ${explanation}\n\n` +
           `Le streak de **${channelStreak}** mot${channelStreak > 1 ? 's' : ''} est perdu ! 😢\n` +
-          `L'historique des mots est réinitialisé.\nRelance en cours...`
+          `L'historique des mots est réinitialisé.\nRelance en cours...\n\n${moderationText}`
         )
         .setColor(0xff6b6b)
         .setTimestamp();
 
       await message.channel.send({ content: `${message.author}`, embeds: [errorEmbed] });
+
+      if (errorThread) {
+        await errorThread.send({
+          content: `🧷 Thread ouvert pour <@${message.author.id}>. Quand le gage est défini, clique sur le bouton pour lancer la surveillance.`,
+          components: [createWordGameGageButtonRow(message.author.id)]
+        });
+      }
 
       // Generate new starting word
       const newWord = await generateNewWord();

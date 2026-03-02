@@ -77,6 +77,11 @@ export async function dispatchChatInputCommand(interaction, context) {
     return true;
   }
 
+  if (commandName === 'jeu-moderation') {
+    await handlers.handleGameModerationCommand(interaction, options);
+    return true;
+  }
+
   if (commandName === 'story') {
     const subcommand = options.getSubcommand();
 

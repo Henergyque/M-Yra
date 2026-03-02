@@ -56,6 +56,26 @@ import { handleQuizCommand } from './handlers/quiz.js';
 import { handleModelCommand, handlePreferencesCommand, handleConfigCommand } from './handlers/preferences-config.js';
 import { dispatchChatInputCommand } from './handlers/interaction-command-router.js';
 import { buildSlashCommands } from './commands/slash-builders.js';
+import {
+  addWhitelistUser,
+  canAccessGames,
+  cleanupExpiredGages,
+  completeGageById,
+  completeGageAndPurge,
+  evaluateGageProgress,
+  getDailyChances,
+  getSanction,
+  getActiveGageByThread,
+  isWhitelisted,
+  listActiveAvatarGages,
+  markAvatarGageChanged,
+  markGageFailedAndSanction,
+  liftGamesSanction,
+  listWhitelistUsers,
+  removeWhitelistUser,
+  startGageMonitoring,
+  updateGageAiAssessment
+} from './services/game-moderation.js';
 
 process.on('unhandledRejection', (reason) => {
   console.error('❌ Unhandled rejection:', reason);
@@ -102,9 +122,12 @@ const debateState = new Map();
 const memberProfileUpsertAt = new Map();
 const serverInfoUpsertAt = new Map();
 const pendingAssistantActions = new Map();
+const gameNoticeCooldown = new Map();
 const MEMBER_PROFILE_UPSERT_MS = 15_000;
 const SERVER_INFO_UPSERT_MS = 60_000;
 const ASSISTANT_ACTION_CONFIRM_TTL_MS = 2 * 60 * 1000;
+const GAME_NOTICE_COOLDOWN_MS = 20_000;
+const GAME_SLASH_COMMANDS = new Set(['story']);
 
 
 // Profils membres et infos serveur
@@ -209,6 +232,359 @@ function createPendingActionKey(guildId, channelId, userId) {
 
 function createActionToken() {
   return Math.random().toString(36).slice(2, 8).toUpperCase();
+}
+
+function extractAvatarHashFromUrl(avatarUrl) {
+  if (!avatarUrl) {
+    return null;
+  }
+  const withoutQuery = avatarUrl.split('?')[0];
+  const parts = withoutQuery.split('/');
+  const fileName = parts[parts.length - 1] || '';
+  const [hash] = fileName.split('.');
+  return hash || null;
+}
+
+async function detectPpGageInThread(thread) {
+  try {
+    const messages = await thread.messages.fetch({ limit: 20 });
+    const content = Array.from(messages.values())
+      .map((item) => item.content || '')
+      .join('\n')
+      .toLowerCase();
+
+    return /(photo\s*de\s*profil|avatar|\bpp\b)/i.test(content);
+  } catch {
+    return false;
+  }
+}
+
+async function extractThreadTextForGage(thread, limit = 30) {
+  try {
+    const messages = await thread.messages.fetch({ limit });
+    const ordered = Array.from(messages.values())
+      .sort((a, b) => a.createdTimestamp - b.createdTimestamp)
+      .map((item) => item.content || '')
+      .filter(Boolean);
+    return ordered.join('\n').trim();
+  } catch {
+    return '';
+  }
+}
+
+function keywordRiskScore(content) {
+  const text = String(content || '').toLowerCase();
+  if (!text) return 0;
+
+  const highRiskPatterns = [
+    /sextape|nude|nu\b|dick|bite\b|suce|baise|baise\s*|encule|viol|agression/i,
+    /humilie|insulte\s+ta\s+famille|harc[eè]le|menace/i,
+    /do[xx]|adresse\s+perso|num[eé]ro\s+priv[eé]/i
+  ];
+
+  if (highRiskPatterns.some((pattern) => pattern.test(text))) {
+    return 0.92;
+  }
+
+  const mediumRiskPatterns = [
+    /insulte|d[ée]grade|rabaisse|humiliant/i,
+    /alcool\s+fort|danger|mise\s+en\s+danger/i
+  ];
+
+  if (mediumRiskPatterns.some((pattern) => pattern.test(text))) {
+    return 0.72;
+  }
+
+  return 0.2;
+}
+
+async function evaluateGageInappropriateness(thread) {
+  const threadText = await extractThreadTextForGage(thread, 30);
+  const localRisk = keywordRiskScore(threadText);
+
+  if (!threadText) {
+    return {
+      shouldAlert: false,
+      confidence: 0,
+      reason: 'Aucun contenu de gage détecté.',
+      excerpt: ''
+    };
+  }
+
+  let aiRisk = localRisk;
+  let reason = 'Analyse heuristique locale.';
+
+  try {
+    const response = await openai.chat.completions.create({
+      model: 'gpt-5.2',
+      temperature: 0,
+      messages: [
+        {
+          role: 'system',
+          content: 'Tu analyses un texte de gage Discord. Retourne strictement JSON: {"risk": number entre 0 et 1, "reason": string courte}. risk = probabilité que le gage soit inapproprié (sexualisé, humiliant, dangereux, harcèlement, données perso).'
+        },
+        {
+          role: 'user',
+          content: JSON.stringify({ text: threadText.slice(0, 3000) })
+        }
+      ]
+    });
+
+    const raw = response.choices?.[0]?.message?.content || '';
+    const parsed = JSON.parse(raw);
+    const parsedRisk = Number(parsed?.risk);
+    if (Number.isFinite(parsedRisk)) {
+      aiRisk = Math.max(localRisk, Math.max(0, Math.min(1, parsedRisk)));
+    }
+    if (parsed?.reason) {
+      reason = String(parsed.reason);
+    }
+  } catch {
+    aiRisk = localRisk;
+  }
+
+  const shouldAlert = aiRisk >= 0.8;
+  const excerpt = threadText.slice(0, 400).replace(/\n+/g, ' ');
+
+  return {
+    shouldAlert,
+    confidence: aiRisk,
+    reason,
+    excerpt
+  };
+}
+
+async function reportInappropriateGageToLogs(interaction, sourceGame, targetUserId, riskAssessment) {
+  const logChannelId = await getChannelForFeature('error_logs', 'errorLogsChannelId', config);
+  if (!logChannelId || !interaction.guild) {
+    return;
+  }
+
+  const logChannel = await interaction.guild.channels.fetch(logChannelId).catch(() => null);
+  if (!logChannel?.isTextBased?.()) {
+    return;
+  }
+
+  const confidencePercent = Math.round((riskAssessment.confidence || 0) * 100);
+  const embed = new EmbedBuilder()
+    .setTitle('Signalement gage inapproprié')
+    .setDescription([
+      `Jeu source: ${sourceGame || 'inconnu'}`,
+      `Utilisateur visé: <@${targetUserId}>`,
+      `Thread: <#${interaction.channel.id}>`,
+      `Confiance: ${confidencePercent}%`,
+      `Motif: ${riskAssessment.reason}`,
+      `Extrait: ${riskAssessment.excerpt || 'n/a'}`
+    ].join('\n'))
+    .setColor(0xe74c3c)
+    .setTimestamp();
+
+  await logChannel.send({ embeds: [embed] }).catch(() => {});
+}
+
+async function checkAvatarGages() {
+  const activeAvatarGages = await listActiveAvatarGages();
+  if (!activeAvatarGages.length) {
+    return;
+  }
+
+  for (const gage of activeAvatarGages) {
+    const guild = await client.guilds.fetch(gage.guild_id).catch(() => null);
+    if (!guild) {
+      continue;
+    }
+
+    const member = await guild.members.fetch(gage.target_user_id).catch(() => null);
+    if (!member) {
+      continue;
+    }
+
+    const currentAvatarUrl = member.displayAvatarURL({ extension: 'png', size: 256, forceStatic: true });
+    const currentHash = extractAvatarHashFromUrl(currentAvatarUrl);
+    const baselineHash = gage.baseline_avatar_hash;
+
+    const expiresAtMs = new Date(gage.expires_at).getTime();
+    const nowMs = Date.now();
+
+    if (baselineHash && currentHash && baselineHash !== currentHash) {
+      await markAvatarGageChanged(gage.id);
+      await markGageFailedAndSanction(gage.guild_id, gage.target_user_id, 'system');
+      await completeGageById(gage.id);
+      continue;
+    }
+
+    if (nowMs >= expiresAtMs) {
+      await completeGageById(gage.id);
+    }
+  }
+}
+
+function getGameNoticeKey(guildId, channelId, userId) {
+  return `${guildId}:${channelId}:${userId}`;
+}
+
+function canSendGameNotice(guildId, channelId, userId) {
+  const key = getGameNoticeKey(guildId, channelId, userId);
+  const last = gameNoticeCooldown.get(key) || 0;
+  if (Date.now() - last < GAME_NOTICE_COOLDOWN_MS) {
+    return false;
+  }
+  gameNoticeCooldown.set(key, Date.now());
+  return true;
+}
+
+async function isGameMessageCandidate(message, feature) {
+  const trimmed = message.content.trim().toLowerCase();
+
+  if (feature === 'counting') {
+    const countingChannelId = await getChannelForFeature('counting', 'countingChannelId', config);
+    return Boolean(countingChannelId && message.channel.id === countingChannelId);
+  }
+
+  if (feature === 'action-verite') {
+    return trimmed === '!actionverite' || trimmed === '!av';
+  }
+
+  if (feature === 'quiz') {
+    return trimmed === '!quiz';
+  }
+
+  if (feature === 'word-game') {
+    const wordGameChannelId = await getChannelForFeature('word_game', 'wordGameChannelId', config);
+    if (!wordGameChannelId || message.channel.id !== wordGameChannelId) {
+      return false;
+    }
+    return !trimmed.startsWith('!wordstats');
+  }
+
+  if (feature === 'story') {
+    if (!getActiveStories().has(message.channel.id)) {
+      return false;
+    }
+    return !(trimmed.startsWith('!') || trimmed.startsWith('/'));
+  }
+
+  return false;
+}
+
+async function enforceGameAccessForMessage(message, feature) {
+  if (!message.guild) {
+    return false;
+  }
+
+  const candidate = await isGameMessageCandidate(message, feature);
+  if (!candidate) {
+    return false;
+  }
+
+  const access = await canAccessGames(message.guild.id, message.author.id);
+  if (access.allowed) {
+    return false;
+  }
+
+  if (canSendGameNotice(message.guild.id, message.channel.id, message.author.id)) {
+    await message.channel.send({
+      content: `${message.author} ⛔ Tu es sous sanction jeux. Demande au owner d'utiliser /jeu-moderation sanction-lift.`
+    });
+  }
+
+  return true;
+}
+
+async function enforceGameAccessForInteraction(interaction) {
+  if (!interaction.guildId || !interaction.isChatInputCommand()) {
+    return false;
+  }
+
+  if (!GAME_SLASH_COMMANDS.has(interaction.commandName)) {
+    return false;
+  }
+
+  const access = await canAccessGames(interaction.guildId, interaction.user.id);
+  if (access.allowed) {
+    return false;
+  }
+
+  await interaction.reply({
+    content: '⛔ Tu es sous sanction jeux. Accès bloqué jusqu\'à levée par le owner.',
+    flags: MessageFlags.Ephemeral
+  });
+
+  return true;
+}
+
+async function handleGageMonitoringMessage(message) {
+  if (!message.guild || !message.channel?.isThread?.()) {
+    return;
+  }
+
+  const activeGage = await getActiveGageByThread(message.guild.id, message.channel.id);
+  if (!activeGage) {
+    return;
+  }
+
+  if (message.author.id !== activeGage.target_user_id) {
+    return;
+  }
+
+  const assessment = await evaluateGageProgress(message.content);
+  await updateGageAiAssessment({
+    guildId: message.guild.id,
+    threadId: message.channel.id,
+    targetUserId: message.author.id,
+    confidence: assessment.confidence,
+    level: assessment.level,
+    reason: assessment.reason
+  });
+}
+
+async function buildModerationAssistantContext(message, userQuestion, isCreator) {
+  if (!message.guild) {
+    return '';
+  }
+
+  const asksModeration = /(sanction|whitelist|liste\s*blanche|chance|counting|word\s*game|gage|mod[ée]ration|bloqu|ban\s*jeux)/i.test(
+    String(userQuestion || '')
+  );
+
+  if (!asksModeration) {
+    return '';
+  }
+
+  const mentionedUser = message.mentions?.users?.first?.() || null;
+  const targetUser = isCreator && mentionedUser ? mentionedUser : message.author;
+
+  const [sanction, daily, whitelisted, activeGages] = await Promise.all([
+    getSanction(message.guild.id, targetUser.id),
+    getDailyChances(message.guild.id, targetUser.id),
+    isWhitelisted(message.guild.id, targetUser.id),
+    allQuery(
+      `SELECT thread_id, challenge_text, monitoring_type, started_at, expires_at
+       FROM gage_monitoring
+       WHERE guild_id = ? AND target_user_id = ? AND status = 'active'
+       ORDER BY started_at DESC
+       LIMIT 3`,
+      [message.guild.id, targetUser.id]
+    )
+  ]);
+
+  const gageLines = (activeGages || []).length
+    ? activeGages.map((gage) => (
+      `- thread:${gage.thread_id} | type:${gage.monitoring_type || 'standard'} | expire:${gage.expires_at} | gage:${gage.challenge_text || 'n/a'}`
+    )).join('\n')
+    : '- aucun gage actif';
+
+  return [
+    '\n\n=== STATUT MODERATION JEUX (SOURCE DB, PRIORITAIRE) ===',
+    `Utilisateur cible: ${targetUser.username} (${targetUser.id})`,
+    `Whitelist: ${whitelisted ? 'oui' : 'non'}`,
+    `Sanction jeux active: ${sanction?.active === 1 ? 'oui' : 'non'}`,
+    sanction?.reason ? `Raison sanction: ${sanction.reason}` : 'Raison sanction: n/a',
+    `Chances du jour (Europe/Paris): ${daily.used}/2`,
+    'Gages actifs:',
+    gageLines,
+    'Instruction: si la question porte sur la modération jeux, base ta réponse sur ces données et n’invente pas.'
+  ].join('\n');
 }
 
 const RESET_PRESERVED_TABLES = new Set([
@@ -1431,8 +1807,10 @@ async function handleAIAssistant(message) {
         }
       }
 
+        const moderationContext = await buildModerationAssistantContext(message, userQuestion, isCreator);
+
       // Get AI response with intelligent routing
-      const promptContext = contextMessages + memoryContext + codeContext;
+        const promptContext = contextMessages + memoryContext + codeContext + moderationContext;
       const startedAt = Date.now();
       const assistantResponse = await getAIAssistantResponse(userQuestion, promptContext, isCreator, message.author.id, message);
 
@@ -3257,6 +3635,125 @@ async function handleParlerCommand(interaction) {
   });
 }
 
+async function handleGameModerationCommand(interaction, options) {
+  if (interaction.user.id !== config.creatorId) {
+    await interaction.reply({
+      content: '❌ Seul le créateur peut utiliser cette commande.',
+      flags: MessageFlags.Ephemeral
+    });
+    return;
+  }
+
+  if (!interaction.guildId) {
+    await interaction.reply({
+      content: '❌ Cette commande doit être utilisée dans un serveur.',
+      flags: MessageFlags.Ephemeral
+    });
+    return;
+  }
+
+  const subcommand = options.getSubcommand();
+
+  if (subcommand === 'sanction-status') {
+    const user = options.getUser('user', true);
+    const [sanction, daily, whitelisted] = await Promise.all([
+      getSanction(interaction.guildId, user.id),
+      getDailyChances(interaction.guildId, user.id),
+      isWhitelisted(interaction.guildId, user.id)
+    ]);
+
+    await interaction.reply({
+      content: [
+        `👤 ${user}`,
+        `Whitelist: ${whitelisted ? '✅ Oui' : '❌ Non'}`,
+        `Sanction jeux: ${sanction?.active === 1 ? '⛔ Active' : '✅ Inactive'}`,
+        sanction?.reason ? `Raison: ${sanction.reason}` : null,
+        `Chances du jour: ${daily.used}/2`
+      ].filter(Boolean).join('\n'),
+      flags: MessageFlags.Ephemeral
+    });
+    return;
+  }
+
+  if (subcommand === 'sanction-lift') {
+    const user = options.getUser('user', true);
+    await liftGamesSanction(interaction.guildId, user.id, interaction.user.id);
+    await interaction.reply({
+      content: `✅ Sanction levée pour ${user}.`,
+      flags: MessageFlags.Ephemeral
+    });
+    return;
+  }
+
+  if (subcommand === 'whitelist-add') {
+    const user = options.getUser('user', true);
+    await addWhitelistUser(interaction.guildId, user.id, interaction.user.id, 'manual_owner');
+    await interaction.reply({
+      content: `✅ ${user} ajouté à la whitelist.`,
+      flags: MessageFlags.Ephemeral
+    });
+    return;
+  }
+
+  if (subcommand === 'whitelist-remove') {
+    const user = options.getUser('user', true);
+    await removeWhitelistUser(interaction.guildId, user.id);
+    await interaction.reply({
+      content: `✅ ${user} retiré de la whitelist.`,
+      flags: MessageFlags.Ephemeral
+    });
+    return;
+  }
+
+  if (subcommand === 'whitelist-status') {
+    const user = options.getUser('user', true);
+    const whitelisted = await isWhitelisted(interaction.guildId, user.id);
+    await interaction.reply({
+      content: whitelisted
+        ? `✅ ${user} est en whitelist.`
+        : `ℹ️ ${user} n'est pas en whitelist.`,
+      flags: MessageFlags.Ephemeral
+    });
+    return;
+  }
+
+  if (subcommand === 'whitelist-list') {
+    const users = await listWhitelistUsers(interaction.guildId);
+    if (!users.length) {
+      await interaction.reply({
+        content: 'ℹ️ Aucune entrée en whitelist.',
+        flags: MessageFlags.Ephemeral
+      });
+      return;
+    }
+
+    const lines = users.slice(0, 40).map((entry, index) => (
+      `${index + 1}. <@${entry.user_id}> · source=${entry.source} · ajouté=${entry.added_at}`
+    ));
+
+    await interaction.reply({
+      content: `📋 Whitelist (${users.length})\n${lines.join('\n')}`,
+      flags: MessageFlags.Ephemeral
+    });
+    return;
+  }
+
+  if (subcommand === 'gage-complete') {
+    const user = options.getUser('user', true);
+    await completeGageAndPurge(interaction.guildId, user.id);
+    await interaction.reply({
+      content: `✅ Gage marqué accompli pour ${user}. Suivi supprimé.`,
+      flags: MessageFlags.Ephemeral
+    });
+    return;
+  }
+
+  await interaction.reply({
+    content: '❌ Sous-commande non reconnue.',
+    flags: MessageFlags.Ephemeral
+  });
+}
+
 async function handleAnonymousRelayDm(message) {
   if (message.guild || message.author.id !== config.creatorId) {
     return false;
@@ -3402,6 +3899,13 @@ client.on('messageCreate', async (message) => {
     return;
   }
 
+  await handleGageMonitoringMessage(message);
+
+  const blockedCounting = await enforceGameAccessForMessage(message, 'counting');
+  if (blockedCounting) {
+    return;
+  }
+
   const handledCounting = await handleCounting(message);
   if (handledCounting) {
     return;
@@ -3478,8 +3982,18 @@ client.on('messageCreate', async (message) => {
     return;
   }
 
+  const blockedActionVerite = await enforceGameAccessForMessage(message, 'action-verite');
+  if (blockedActionVerite) {
+    return;
+  }
+
   const handledActionVerite = await handleActionVeriteCommand(message);
   if (handledActionVerite) {
+    return;
+  }
+
+  const blockedQuiz = await enforceGameAccessForMessage(message, 'quiz');
+  if (blockedQuiz) {
     return;
   }
 
@@ -3493,8 +4007,18 @@ client.on('messageCreate', async (message) => {
     return;
   }
 
+  const blockedWordGame = await enforceGameAccessForMessage(message, 'word-game');
+  if (blockedWordGame) {
+    return;
+  }
+
   const handledWordGame = await handleWordGame(message);
   if (handledWordGame) {
+    return;
+  }
+
+  const blockedStory = await enforceGameAccessForMessage(message, 'story');
+  if (blockedStory) {
     return;
   }
 
@@ -3521,6 +4045,24 @@ client.once('clientReady', async () => {
     activities: [{ name: '☕ !support', type: 0 }]
   });
 
+  await checkAvatarGages().catch((error) => {
+    console.warn('⚠️ Vérification avatar gages au démarrage échouée:', error.message);
+  });
+
+  await cleanupExpiredGages().catch((error) => {
+    console.warn('⚠️ Cleanup gages au démarrage échoué:', error.message);
+  });
+
+  setInterval(() => {
+    checkAvatarGages().catch((error) => {
+      console.warn('⚠️ Vérification avatar gages périodique échouée:', error.message);
+    });
+
+    cleanupExpiredGages().catch((error) => {
+      console.warn('⚠️ Cleanup gages périodique échoué:', error.message);
+    });
+  }, 10 * 60 * 1000);
+
   // Register slash commands
   try {
     const commands = buildSlashCommands();
@@ -3537,6 +4079,11 @@ client.once('clientReady', async () => {
 client.on('interactionCreate', async (interaction) => {
   // Handle slash commands
   if (interaction.isChatInputCommand()) {
+    const blocked = await enforceGameAccessForInteraction(interaction);
+    if (blocked) {
+      return;
+    }
+
     try {
       await dispatchChatInputCommand(interaction, {
         client,
@@ -3556,6 +4103,7 @@ client.on('interactionCreate', async (interaction) => {
           handleMemoryResetCommand,
           handleParlerCommand,
           handleAutoModSimpleCommand,
+          handleGameModerationCommand,
           handleStorySlashStart,
           handleStorySlashJoin,
           handleStorySlashReady,
@@ -3618,9 +4166,110 @@ client.on('interactionCreate', async (interaction) => {
     return;
   }
 
+  if (interaction.customId.startsWith('gage:')) {
+    const [, sourceGame, targetUserId] = interaction.customId.split(':');
+
+    if (!interaction.guildId || !targetUserId) {
+      await interaction.reply({
+        content: '❌ Bouton de gage invalide.',
+        flags: MessageFlags.Ephemeral
+      });
+      return;
+    }
+
+    if (!interaction.channel?.isThread?.()) {
+      await interaction.reply({
+        content: 'ℹ️ Ce bouton doit être utilisé depuis le thread du gage.',
+        flags: MessageFlags.Ephemeral
+      });
+      return;
+    }
+
+    const existingMonitoring = await getActiveGageByThread(interaction.guildId, interaction.channel.id);
+
+    const disabledComponents = interaction.message.components.map((row) => ({
+      type: row.type,
+      components: row.components.map((component) => ({
+        type: component.type,
+        custom_id: component.customId,
+        label: component.label,
+        style: component.style,
+        emoji: component.emoji,
+        url: component.url,
+        disabled: true
+      }))
+    }));
+
+    if (existingMonitoring && existingMonitoring.target_user_id === targetUserId) {
+      await interaction.update({ components: disabledComponents });
+      await interaction.followUp({
+        content: `ℹ️ Surveillance déjà active pour <@${targetUserId}> sur ce thread.`,
+        flags: MessageFlags.Ephemeral
+      });
+      return;
+    }
+
+    const isPpGage = await detectPpGageInThread(interaction.channel);
+    const riskAssessment = await evaluateGageInappropriateness(interaction.channel);
+    if (riskAssessment.shouldAlert) {
+      await reportInappropriateGageToLogs(interaction, sourceGame, targetUserId, riskAssessment);
+    }
+
+    let baselineAvatarHash = null;
+    let baselineAvatarUrl = null;
+    if (isPpGage) {
+      const member = await interaction.guild.members.fetch(targetUserId).catch(() => null);
+      if (member) {
+        baselineAvatarUrl = member.displayAvatarURL({ extension: 'png', size: 256, forceStatic: true });
+        baselineAvatarHash = extractAvatarHashFromUrl(baselineAvatarUrl);
+      }
+    }
+
+    await startGageMonitoring({
+      guildId: interaction.guildId,
+      threadId: interaction.channel.id,
+      targetUserId,
+      assignedBy: interaction.user.id,
+      challengeText: `Gage validé depuis bouton ${sourceGame || 'jeu'}`,
+      monitoringType: isPpGage ? 'avatar_24h' : 'standard',
+      baselineAvatarHash,
+      baselineAvatarUrl
+    });
+
+    await interaction.update({
+      components: disabledComponents
+    });
+
+    await interaction.followUp({
+      content: isPpGage
+        ? `🧷 Gage PP détecté. Surveillance avatar 24h activée pour <@${targetUserId}>.`
+        : `🧷 Gage enregistré. Surveillance IA activée 24h pour <@${targetUserId}>.`,
+      flags: MessageFlags.Ephemeral
+    });
+
+    if (riskAssessment.shouldAlert) {
+      await interaction.followUp({
+        content: '⚠️ Le gage semble potentiellement inapproprié et a été signalé dans le salon de logs.',
+        flags: MessageFlags.Ephemeral
+      });
+    }
+    return;
+  }
+
   const [namespace, action] = interaction.customId.split(':');
   if (namespace !== 'action-verite') {
     return;
+  }
+
+  if ((action === 'action' || action === 'verite') && interaction.guildId) {
+    const access = await canAccessGames(interaction.guildId, interaction.user.id);
+    if (!access.allowed) {
+      await interaction.reply({
+        content: '⛔ Tu es sous sanction jeux. Demande au owner de lever la sanction.',
+        flags: MessageFlags.Ephemeral
+      });
+      return;
+    }
   }
 
   const game = getActionVeriteGames().get(interaction.message.id);

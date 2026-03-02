@@ -310,5 +310,69 @@ export function buildSlashCommands() {
       )
   );
 
+  commands.push(
+    new SlashCommandBuilder()
+      .setName('jeu-moderation')
+      .setDescription('🎮 Gérer sanctions jeux, whitelist et gages (owner)')
+      .addSubcommand(sub =>
+        sub.setName('sanction-status')
+          .setDescription('Voir le statut sanction d\'un membre')
+          .addUserOption(opt =>
+            opt.setName('user')
+              .setDescription('Membre cible')
+              .setRequired(true)
+          )
+      )
+      .addSubcommand(sub =>
+        sub.setName('sanction-lift')
+          .setDescription('Lever une sanction jeux')
+          .addUserOption(opt =>
+            opt.setName('user')
+              .setDescription('Membre cible')
+              .setRequired(true)
+          )
+      )
+      .addSubcommand(sub =>
+        sub.setName('whitelist-add')
+          .setDescription('Ajouter un membre en whitelist')
+          .addUserOption(opt =>
+            opt.setName('user')
+              .setDescription('Membre cible')
+              .setRequired(true)
+          )
+      )
+      .addSubcommand(sub =>
+        sub.setName('whitelist-remove')
+          .setDescription('Retirer un membre de la whitelist')
+          .addUserOption(opt =>
+            opt.setName('user')
+              .setDescription('Membre cible')
+              .setRequired(true)
+          )
+      )
+      .addSubcommand(sub =>
+        sub.setName('whitelist-status')
+          .setDescription('Voir si un membre est en whitelist')
+          .addUserOption(opt =>
+            opt.setName('user')
+              .setDescription('Membre cible')
+              .setRequired(true)
+          )
+      )
+      .addSubcommand(sub =>
+        sub.setName('whitelist-list')
+          .setDescription('Lister la whitelist')
+      )
+      .addSubcommand(sub =>
+        sub.setName('gage-complete')
+          .setDescription('Marquer un gage accompli et purger son suivi')
+          .addUserOption(opt =>
+            opt.setName('user')
+              .setDescription('Membre cible')
+              .setRequired(true)
+          )
+      )
+  );
+
   return commands;
 }

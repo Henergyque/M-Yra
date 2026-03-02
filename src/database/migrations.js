@@ -1,5 +1,5 @@
 import { Logger } from '../utils/logger.js';
-import { runQuery, getQuery, initializeDatabase } from '../db.js';
+import { runQuery, getQuery, allQuery, initializeDatabase } from '../db.js';
 import { fileURLToPath } from 'node:url';
 
 const logger = new Logger('DB-MIGRATIONS');
@@ -252,6 +252,146 @@ export const migrations = [
       await runQuery('DROP TABLE IF EXISTS ai_request_logs');
       await runQuery('DROP TABLE IF EXISTS memory_embeddings');
       await runQuery('DROP TABLE IF EXISTS user_memory_slots');
+    }
+  },
+
+  {
+    version: 7,
+    name: 'Add game moderation, sanctions and gage monitoring tables',
+    up: async () => {
+      logger.info('🔄 Migration 7: Adding game moderation tables');
+
+      await runQuery(`
+        CREATE TABLE IF NOT EXISTS game_daily_chances (
+          guild_id TEXT NOT NULL,
+          user_id TEXT NOT NULL,
+          date_key TEXT NOT NULL,
+          chances_used INTEGER DEFAULT 0,
+          updated_at TEXT NOT NULL,
+          PRIMARY KEY (guild_id, user_id, date_key)
+        )
+      `);
+
+      await runQuery(`
+        CREATE TABLE IF NOT EXISTS game_sanctions (
+          guild_id TEXT NOT NULL,
+          user_id TEXT NOT NULL,
+          active INTEGER DEFAULT 1,
+          reason TEXT,
+          source TEXT,
+          created_at TEXT NOT NULL,
+          created_by TEXT,
+          lifted_at TEXT,
+          lifted_by TEXT,
+          PRIMARY KEY (guild_id, user_id)
+        )
+      `);
+
+      await runQuery(`
+        CREATE TABLE IF NOT EXISTS game_whitelist (
+          guild_id TEXT NOT NULL,
+          user_id TEXT NOT NULL,
+          source TEXT DEFAULT 'manual',
+          confidence REAL,
+          added_at TEXT NOT NULL,
+          added_by TEXT,
+          PRIMARY KEY (guild_id, user_id)
+        )
+      `);
+
+      await runQuery(`
+        CREATE TABLE IF NOT EXISTS game_infraction_events (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          guild_id TEXT NOT NULL,
+          channel_id TEXT,
+          user_id TEXT NOT NULL,
+          game_type TEXT NOT NULL,
+          event_type TEXT NOT NULL,
+          ai_confidence REAL,
+          confidence_level TEXT,
+          details TEXT,
+          created_at TEXT NOT NULL
+        )
+      `);
+
+      await runQuery(`
+        CREATE TABLE IF NOT EXISTS gage_monitoring (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          guild_id TEXT NOT NULL,
+          thread_id TEXT NOT NULL,
+          target_user_id TEXT NOT NULL,
+          assigned_by TEXT,
+          challenge_text TEXT,
+          started_at TEXT NOT NULL,
+          expires_at TEXT NOT NULL,
+          monitoring_type TEXT DEFAULT 'standard',
+          baseline_avatar_hash TEXT,
+          baseline_avatar_url TEXT,
+          avatar_changed INTEGER DEFAULT 0,
+          last_ai_confidence REAL,
+          last_ai_level TEXT,
+          last_ai_reason TEXT,
+          status TEXT DEFAULT 'active',
+          UNIQUE(guild_id, thread_id, target_user_id)
+        )
+      `);
+
+      await runQuery(`
+        CREATE INDEX IF NOT EXISTS idx_game_infraction_recent
+        ON game_infraction_events(guild_id, user_id, created_at DESC)
+      `);
+
+      await runQuery(`
+        CREATE INDEX IF NOT EXISTS idx_gage_monitoring_thread
+        ON gage_monitoring(guild_id, thread_id, status)
+      `);
+
+      logger.info('✅ Migration 7 complete');
+    },
+    down: async () => {
+      logger.warn('⬇️ Rolling back migration 7: dropping game moderation tables');
+      await runQuery('DROP INDEX IF EXISTS idx_game_infraction_recent');
+      await runQuery('DROP INDEX IF EXISTS idx_gage_monitoring_thread');
+      await runQuery('DROP TABLE IF EXISTS gage_monitoring');
+      await runQuery('DROP TABLE IF EXISTS game_infraction_events');
+      await runQuery('DROP TABLE IF EXISTS game_whitelist');
+      await runQuery('DROP TABLE IF EXISTS game_sanctions');
+      await runQuery('DROP TABLE IF EXISTS game_daily_chances');
+    }
+  },
+
+  {
+    version: 8,
+    name: 'Add avatar tracking columns for gage monitoring',
+    up: async () => {
+      logger.info('🔄 Migration 8: Updating gage monitoring columns');
+
+      const existing = await getQuery(`SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'gage_monitoring'`);
+      if (!existing) {
+        logger.info('ℹ️ gage_monitoring table missing, skipping migration 8 alterations');
+        return;
+      }
+
+      const columnRows = await allQuery('PRAGMA table_info(gage_monitoring)');
+      const names = new Set((columnRows || []).map((row) => row.name));
+
+      if (!names.has('monitoring_type')) {
+        await runQuery(`ALTER TABLE gage_monitoring ADD COLUMN monitoring_type TEXT DEFAULT 'standard'`);
+      }
+      if (!names.has('baseline_avatar_hash')) {
+        await runQuery('ALTER TABLE gage_monitoring ADD COLUMN baseline_avatar_hash TEXT');
+      }
+      if (!names.has('baseline_avatar_url')) {
+        await runQuery('ALTER TABLE gage_monitoring ADD COLUMN baseline_avatar_url TEXT');
+      }
+      if (!names.has('avatar_changed')) {
+        await runQuery('ALTER TABLE gage_monitoring ADD COLUMN avatar_changed INTEGER DEFAULT 0');
+      }
+
+      logger.info('✅ Migration 8 complete');
+    },
+    down: async () => {
+      logger.warn('⬇️ Migration 8 rollback not supported for SQLite column drops');
     }
   }
 ];
