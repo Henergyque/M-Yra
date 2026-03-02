@@ -68,8 +68,8 @@ import {
   getActiveGageByThread,
   isWhitelisted,
   listActiveAvatarGages,
-  markAvatarGageChanged,
   markGageFailedAndSanction,
+  startAvatarGageWindow,
   liftGamesSanction,
   listWhitelistUsers,
   removeWhitelistUser,
@@ -402,12 +402,26 @@ async function checkAvatarGages() {
     const currentAvatarUrl = member.displayAvatarURL({ extension: 'png', size: 256, forceStatic: true });
     const currentHash = extractAvatarHashFromUrl(currentAvatarUrl);
     const baselineHash = gage.baseline_avatar_hash;
+    const avatarWindowStarted = Number(gage.avatar_changed || 0) === 1;
 
     const expiresAtMs = new Date(gage.expires_at).getTime();
     const nowMs = Date.now();
 
+    if (!avatarWindowStarted) {
+      if (baselineHash && currentHash && baselineHash !== currentHash) {
+        await startAvatarGageWindow(gage.id, currentHash, currentAvatarUrl);
+        continue;
+      }
+
+      if (nowMs >= expiresAtMs) {
+        await markGageFailedAndSanction(gage.guild_id, gage.target_user_id, 'system');
+        await completeGageById(gage.id);
+      }
+
+      continue;
+    }
+
     if (baselineHash && currentHash && baselineHash !== currentHash) {
-      await markAvatarGageChanged(gage.id);
       await markGageFailedAndSanction(gage.guild_id, gage.target_user_id, 'system');
       await completeGageById(gage.id);
       continue;

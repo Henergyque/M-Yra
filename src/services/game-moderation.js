@@ -537,7 +537,7 @@ export async function completeGageAndPurge(guildId, userId) {
 
 export async function listActiveAvatarGages() {
   return allQuery(
-    `SELECT id, guild_id, thread_id, target_user_id, expires_at, baseline_avatar_hash
+    `SELECT id, guild_id, thread_id, target_user_id, expires_at, baseline_avatar_hash, avatar_changed
      FROM gage_monitoring
      WHERE status = 'active' AND monitoring_type = 'avatar_24h'`
   );
@@ -547,6 +547,27 @@ export async function markAvatarGageChanged(gageId) {
   await runQuery(
     `UPDATE gage_monitoring SET avatar_changed = 1 WHERE id = ?`,
     [gageId]
+  );
+}
+
+export async function startAvatarGageWindow(gageId, baselineAvatarHash, baselineAvatarUrl = null) {
+  const now = new Date();
+  const expiresAt = new Date(now.getTime() + GAGE_MONITORING_MS);
+  await runQuery(
+    `UPDATE gage_monitoring
+     SET avatar_changed = 1,
+         baseline_avatar_hash = ?,
+         baseline_avatar_url = ?,
+         started_at = ?,
+         expires_at = ?
+     WHERE id = ?`,
+    [
+      baselineAvatarHash,
+      baselineAvatarUrl,
+      now.toISOString(),
+      expiresAt.toISOString(),
+      gageId
+    ]
   );
 }
 
@@ -579,6 +600,10 @@ export async function cleanupExpiredGages() {
 
   for (const row of expired) {
     if (row.monitoring_type === 'avatar_24h') {
+      const avatarRow = await getQuery('SELECT avatar_changed FROM gage_monitoring WHERE id = ?', [row.id]);
+      if (Number(avatarRow?.avatar_changed || 0) === 0) {
+        await markGageFailedAndSanction(row.guild_id, row.target_user_id, 'system');
+      }
       continue;
     }
     await markGageFailedAndSanction(row.guild_id, row.target_user_id, 'system');
