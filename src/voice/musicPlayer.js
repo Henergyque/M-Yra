@@ -190,14 +190,28 @@ export async function joinMusicChannel(guild, voiceChannelId, textChannelId) {
     });
   }
 
-  if (!state.connection || state.connection.state.status === VoiceConnectionStatus.Destroyed) {
-    state.connection = joinVoiceChannel({
+  const connectionIsUsable = state.connection
+    && state.connection.state.status !== VoiceConnectionStatus.Destroyed;
+
+  if (!connectionIsUsable) {
+    const connection = joinVoiceChannel({
       channelId: voiceChannelId,
       guildId: guild.id,
       adapterCreator: guild.voiceAdapterCreator
     });
-    await entersState(state.connection, VoiceConnectionStatus.Ready, 15_000);
-    state.connection.subscribe(state.player);
+    connection.on('stateChange', (oldState, newState) => {
+      console.log(`🔌 Connexion vocale: ${oldState.status} -> ${newState.status}`);
+    });
+
+    try {
+      await entersState(connection, VoiceConnectionStatus.Ready, 30_000);
+    } catch (error) {
+      connection.destroy();
+      throw error;
+    }
+
+    connection.subscribe(state.player);
+    state.connection = connection;
   }
 
   return state;
