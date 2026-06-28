@@ -10,7 +10,7 @@ import {
 } from '@discordjs/voice';
 import play from 'play-dl';
 import ffmpegPath from 'ffmpeg-static';
-import { YOUTUBE_DL_PATH as ytdlpBinaryPath } from 'yt-dlp-exec/src/constants.js';
+import { ensureYtDlpBinary } from './ytdlp-binary.js';
 
 // One state object per guild: connection, player, queue, history, anchor channels
 const guildStates = new Map();
@@ -106,7 +106,8 @@ function killTrackProcesses(state) {
   }
 }
 
-function createTrackResource(url) {
+async function createTrackResource(url) {
+  const ytdlpBinaryPath = await ensureYtDlpBinary();
   const ytdlpProcess = spawn(ytdlpBinaryPath, ['-f', 'bestaudio', '-o', '-', '--quiet', '--no-warnings', url]);
   const ffmpegProcess = spawn(ffmpegPath, [
     '-i', 'pipe:0',
@@ -131,7 +132,7 @@ function createTrackResource(url) {
 async function playTrack(guild, state, track) {
   killTrackProcesses(state);
 
-  const { stream, processes } = createTrackResource(track.url);
+  const { stream, processes } = await createTrackResource(track.url);
   const resource = createAudioResource(stream, { inputType: StreamType.Raw });
 
   state.current = track;
