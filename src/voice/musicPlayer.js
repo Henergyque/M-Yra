@@ -204,7 +204,7 @@ export async function joinMusicChannel(guild, voiceChannelId, textChannelId) {
     });
 
     try {
-      await entersState(connection, VoiceConnectionStatus.Ready, 30_000);
+      await entersState(connection, VoiceConnectionStatus.Ready, 60_000);
     } catch (error) {
       connection.destroy();
       throw error;
