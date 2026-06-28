@@ -36,6 +36,35 @@ export function buildSlashCommands() {
 
   commands.push(
     new SlashCommandBuilder()
+      .setName('play')
+      .setDescription('🎵 Jouer une musique (lien YouTube ou recherche) dans le vocal')
+      .addStringOption(opt =>
+        opt.setName('recherche')
+          .setDescription('Lien YouTube ou termes de recherche')
+          .setRequired(true)
+      )
+  );
+
+  commands.push(
+    new SlashCommandBuilder()
+      .setName('skip')
+      .setDescription('⏭️ Passer la musique en cours')
+  );
+
+  commands.push(
+    new SlashCommandBuilder()
+      .setName('stop')
+      .setDescription('⏹️ Arrêter la musique et quitter le vocal')
+  );
+
+  commands.push(
+    new SlashCommandBuilder()
+      .setName('queue')
+      .setDescription('📋 Voir la file d\'attente musicale')
+  );
+
+  commands.push(
+    new SlashCommandBuilder()
       .setName('clear')
       .setDescription('Supprimer des messages dans le salon')
       .addIntegerOption(opt =>
@@ -193,7 +222,8 @@ export function buildSlashCommands() {
                 { name: 'Thread Auto-Create', value: 'thread_create' },
                 { name: 'Word Game', value: 'word_game' },
                 { name: 'Quiz', value: 'quiz' },
-                { name: 'Error Logs', value: 'error_logs' }
+                { name: 'Error Logs', value: 'error_logs' },
+                { name: 'Musique (vocal)', value: 'music' }
               )
               .setRequired(true)
           )
@@ -217,7 +247,8 @@ export function buildSlashCommands() {
                 { name: 'Thread Auto-Create', value: 'thread_create' },
                 { name: 'Word Game', value: 'word_game' },
                 { name: 'Quiz', value: 'quiz' },
-                { name: 'Error Logs', value: 'error_logs' }
+                { name: 'Error Logs', value: 'error_logs' },
+                { name: 'Musique (vocal)', value: 'music' }
               )
               .setRequired(true)
           )

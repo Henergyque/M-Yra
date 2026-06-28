@@ -68,6 +68,7 @@ export const config = {
   confessionChannelId: process.env.CONFESSION_CHANNEL_ID,
   countingChannelId: process.env.COUNTING_CHANNEL_ID,
   storyLibraryChannelId: process.env.STORY_LIBRARY_CHANNEL_ID,
+  musicVoiceChannelId: process.env.MUSIC_VOICE_CHANNEL_ID,
 
   // === GITHUB (Optional) ===
   github: {

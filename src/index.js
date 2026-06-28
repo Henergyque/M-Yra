@@ -54,6 +54,8 @@ import { handleStoryContribution, finishStory, getActiveStories, setActiveStory,
 import { handleActionVeriteCommand, getActionVeriteGames, getActionVeriteLocks, createActionVeriteRow } from './handlers/action-verite.js';
 import { handleQuizCommand } from './handlers/quiz.js';
 import { handleModelCommand, handlePreferencesCommand, handleConfigCommand } from './handlers/preferences-config.js';
+import { handlePlayCommand, handleSkipCommand, handleStopCommand, handleQueueCommand } from './handlers/music.js';
+import { joinMusicChannel } from './voice/musicPlayer.js';
 import { dispatchChatInputCommand } from './handlers/interaction-command-router.js';
 import { buildSlashCommands } from './commands/slash-builders.js';
 import {
@@ -110,7 +112,8 @@ const client = new Client({
     GatewayIntentBits.Guilds,
     GatewayIntentBits.GuildMessages,
     GatewayIntentBits.MessageContent,
-    GatewayIntentBits.DirectMessages
+    GatewayIntentBits.DirectMessages,
+    GatewayIntentBits.GuildVoiceStates
   ],
   partials: [Partials.Channel]
 });
@@ -4088,6 +4091,20 @@ client.once('clientReady', async () => {
   } catch (err) {
     console.error('❌ Erreur enregistrement slash commands:', err);
   }
+
+  // Auto-join configured music voice channel and stay connected
+  try {
+    const musicChannelId = await getChannelForFeature('music', 'musicVoiceChannelId', config);
+    if (musicChannelId) {
+      const musicChannel = await client.channels.fetch(musicChannelId).catch(() => null);
+      if (musicChannel?.isVoiceBased?.()) {
+        await joinMusicChannel(musicChannel.guild, musicChannel.id, null);
+        console.log(`🎵 Connecté au salon vocal musique: ${musicChannel.name}`);
+      }
+    }
+  } catch (err) {
+    console.warn('⚠️ Connexion auto au salon musique échouée:', err.message);
+  }
 });
 
 client.on('interactionCreate', async (interaction) => {
@@ -4103,6 +4120,10 @@ client.on('interactionCreate', async (interaction) => {
         client,
         config,
         handlers: {
+          handlePlayCommand,
+          handleSkipCommand,
+          handleStopCommand,
+          handleQueueCommand,
           handleClearCommand,
           handleRoastCommand,
           handleVersusAiCommand,
