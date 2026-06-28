@@ -118,10 +118,16 @@ async function createTrackResource(url) {
   ]);
 
   ytdlpProcess.stdout.pipe(ffmpegProcess.stdin);
-  ytdlpProcess.on('error', () => {});
-  ffmpegProcess.on('error', () => {});
-  ytdlpProcess.stderr.on('data', () => {});
-  ffmpegProcess.stderr.on('data', () => {});
+  ytdlpProcess.on('error', (err) => console.warn('⚠️ yt-dlp spawn error:', err.message));
+  ffmpegProcess.on('error', (err) => console.warn('⚠️ ffmpeg spawn error:', err.message));
+  ytdlpProcess.stderr.on('data', (chunk) => console.warn('[yt-dlp]', chunk.toString().trim()));
+  ffmpegProcess.stderr.on('data', (chunk) => console.warn('[ffmpeg]', chunk.toString().trim()));
+  ytdlpProcess.on('close', (code) => {
+    if (code !== 0 && code !== null) console.warn(`⚠️ yt-dlp exited with code ${code}`);
+  });
+  ffmpegProcess.on('close', (code) => {
+    if (code !== 0 && code !== null) console.warn(`⚠️ ffmpeg exited with code ${code}`);
+  });
 
   return {
     stream: ffmpegProcess.stdout,

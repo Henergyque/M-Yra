@@ -29,19 +29,29 @@ export async function ensureYtDlpBinary() {
   const assetName = getAssetName();
   const binaryPath = path.join(binDir, assetName);
 
-  if (!fs.existsSync(binaryPath)) {
-    fs.mkdirSync(binDir, { recursive: true });
-    const url = `https://github.com/yt-dlp/yt-dlp/releases/latest/download/${assetName}`;
-    const response = await fetch(url, { redirect: 'follow' });
-    if (!response.ok) {
-      throw new Error(`Téléchargement de yt-dlp échoué: HTTP ${response.status}`);
-    }
-    const buffer = Buffer.from(await response.arrayBuffer());
-    fs.writeFileSync(binaryPath, buffer, { mode: 0o755 });
-    if (process.platform !== 'win32') {
-      fs.chmodSync(binaryPath, 0o755);
-    }
+  const existingSize = fs.existsSync(binaryPath) ? fs.statSync(binaryPath).size : 0;
+  if (existingSize > 1_000_000) {
+    console.log(`✅ yt-dlp déjà présent (${binaryPath}, ${existingSize} octets)`);
+    cachedBinaryPath = binaryPath;
+    return binaryPath;
   }
+
+  console.log(`⬇️ Téléchargement de yt-dlp (${assetName})...`);
+  fs.mkdirSync(binDir, { recursive: true });
+  const url = `https://github.com/yt-dlp/yt-dlp/releases/latest/download/${assetName}`;
+  const response = await fetch(url, { redirect: 'follow' });
+  if (!response.ok) {
+    throw new Error(`Téléchargement de yt-dlp échoué: HTTP ${response.status}`);
+  }
+  const buffer = Buffer.from(await response.arrayBuffer());
+  if (buffer.length < 1_000_000) {
+    throw new Error(`Binaire yt-dlp téléchargé trop petit (${buffer.length} octets), probablement corrompu`);
+  }
+  fs.writeFileSync(binaryPath, buffer, { mode: 0o755 });
+  if (process.platform !== 'win32') {
+    fs.chmodSync(binaryPath, 0o755);
+  }
+  console.log(`✅ yt-dlp téléchargé (${binaryPath}, ${buffer.length} octets)`);
 
   cachedBinaryPath = binaryPath;
   return binaryPath;
