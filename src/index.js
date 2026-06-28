@@ -1,7 +1,13 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import dns from 'node:dns';
 import { fileURLToPath } from 'node:url';
 import { execSync } from 'node:child_process';
+
+// Force la résolution DNS en IPv4 d'abord: certains hébergeurs (Railway, Render...)
+// ont un NAT IPv4 fonctionnel mais cassent le handshake UDP voix de Discord
+// si Node tente l'IPv6 en premier (boucle infinie signalling/connecting).
+dns.setDefaultResultOrder('ipv4first');
 import {
   ActionRowBuilder,
   ButtonBuilder,
