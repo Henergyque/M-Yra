@@ -101,6 +101,3 @@ export class Logger {
     delete this.timers[label];
   }
 }
-
-// Global logger instance for common use
-export const globalLogger = new Logger('GLOBAL', 'INFO');

@@ -159,7 +159,3 @@ export async function handleQuizCommand(message) {
   activeQuiz = null;
   return true;
 }
-
-export function getActiveQuiz() {
-  return activeQuiz;
-}

@@ -3,10 +3,6 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { execSync } from 'node:child_process';
 import {
-  ActionRowBuilder,
-  ButtonBuilder,
-  ButtonStyle,
-  ChannelType,
   Client,
   EmbedBuilder,
   GatewayIntentBits,
@@ -22,10 +18,7 @@ import {
   getMemoriesForUser,
   searchMemories,
   searchMemoriesSemantic,
-  getAllMemories,
   deleteMemory,
-  loadConversationHistory,
-  loadVannesContext,
   addFact,
   addSummary,
   addAttachment,
@@ -40,7 +33,7 @@ import {
   getUserMemorySlots,
   extractAndStoreMemorySlots
 } from './brain/memory.js';
-import { openai, grok, claude, geminiModel, mistral } from './ai/clients.js';
+import { openai, grok, claude } from './ai/clients.js';
 import { aiResponseBuilder } from './ai/response-builder.js';
 import { handleCounting, setCountingState } from './handlers/counting.js';
 import { handleConfession, handleAdminConfessionLookup } from './handlers/confession.js';
@@ -253,10 +246,6 @@ async function resetMemoryDataPreservingGames() {
 }
 
 
-
-function isConfiguredChannel(channelId, list) {
-  return Array.isArray(list) && list.includes(channelId);
-}
 
 function normalizeOptionalValue(value) {
   if (value === undefined || value === null) return null;
@@ -1260,18 +1249,6 @@ async function handleStorySlashEnd(interaction) {
 
 
 
-// REMOVED: Quiz functions below are now in handlers/quiz.js (see imports at line 48)
-// Keeping only: handleQuizCommand imported from handlers/quiz.js
-
-// DUPLICATE FUNCTIONS REMOVED:
-// - createQuizThemeEmbed() - moved to handlers/quiz.js
-// - createQuizQuestionEmbed() - moved to handlers/quiz.js
-// - createQuizLeaderboardEmbed() - moved to handlers/quiz.js
-// - shuffle() - moved to handlers/quiz.js
-// - handleQuizCommand() - imported from handlers/quiz.js at line 48
-
-// REMOVED: handleQuizCommand - using imported version from handlers/quiz.js
-
 // Collecte les auteurs humains distincts des messages récents (hors bots).
 function collectParticipants(message, recentMessages) {
   const botId = message.client.user?.id;
@@ -2076,47 +2053,6 @@ async function handleAIAssistant(message) {
     console.error('❌ Erreur assistant:', error);
   }
 }
-// Load all members context (names, IDs, recent activity)
-async function loadMembersContext(guild) {
-  try {
-    // Charger les profils connus (essentiels)
-    const members = await allQuery('SELECT discord_id, real_name, username, display_name, roles, last_seen FROM member_profiles ORDER BY last_seen DESC LIMIT 50');
-    if (!members || members.length === 0) return '';
-
-    let membersInfo = 'Membres du serveur:\n';
-    for (const m of members) {
-      const name = m.real_name || m.display_name || m.username || 'inconnu';
-      const isCreator = m.discord_id === config.creatorId ? ' (créateur)' : '';
-      membersInfo += `- ${name}${isCreator}\n`;
-    }
-    return membersInfo;
-  } catch (error) {
-    console.warn('⚠️ Erreur chargement contexte membres (non-bloquant):', error.message);
-    return '';
-  }
-}
-
-// Détecter et apprendre les noms automatiquement depuis les réponses de l'IA
-async function detectAndLearnNames(responseText, userId) {
-  const learnPattern = /\[\[LEARN_NAME:(\d+):([^\]]+)\]\]/g;
-  let match;
-  
-  while ((match = learnPattern.exec(responseText)) !== null) {
-    const targetUserId = match[1];
-    const realName = match[2].trim();
-    
-    try {
-      await setKnownMember(targetUserId, realName, 'ai-auto-learn');
-      console.log(`🧠 [Auto-Learn] L'IA a appris que ${targetUserId} s'appelle ${realName}`);
-    } catch (err) {
-      console.error('❌ Erreur apprentissage nom:', err);
-    }
-  }
-  
-  // Retirer les markers de la réponse finale
-  return responseText.replace(/\[\[LEARN_NAME:[^\]]+\]\]/g, '').trim();
-}
-
 // Initialiser le prompt général au démarrage
 async function initializeGeneralPrompt() {
   try {
@@ -2228,128 +2164,7 @@ Bon: "Salut"`;
   }
 }
 
-async function trackAIPerformance(model, feature, question, response, latency) {
-  try {
-    // IA s'auto-évalue basée sur ses propres critères
-    const selfRating = await evaluateSelfPerformance(model, question, response);
-    
-    await runQuery(
-      `INSERT INTO ai_performance (model, feature, question, response, latency_ms, user_rating, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?)`,
-      [model, feature, question, response, latency, selfRating, new Date().toISOString()]
-    );
-
-    // Recalculate average performance
-    await updateAIMetrics(model);
-    
-    return { selfRating, latency };
-  } catch (error) {
-    console.error(`Erreur tracking perf ${model}:`, error);
-    return null;
-  }
-}
-
-async function trackAIDecision(model, action, reasoning, userAccepted, iaConfidence) {
-  try {
-    const decisionId = await runQuery(
-      `INSERT INTO ai_decisions (model, proposed_action, reasoning, user_accepted, ia_confidence, proposed_at)
-       VALUES (?, ?, ?, ?, ?, ?)`,
-      [model, action, reasoning, userAccepted ? 1 : 0, iaConfidence, new Date().toISOString()]
-    );
-    return decisionId;
-  } catch (error) {
-    console.error(`Erreur tracking decision ${model}:`, error);
-  }
-}
-
-async function recordDecisionOutcome(decisionId, outcome, confidence) {
-  try {
-    await runQuery(
-      `UPDATE ai_decisions SET outcome = ?, outcome_confidence = ? WHERE id = ?`,
-      [outcome, confidence, decisionId]
-    );
-  } catch (error) {
-    console.error('Erreur enregistrement outcome:', error);
-  }
-}
-
-async function updateAIMetrics(model) {
-  try {
-    const rows = await allQuery(
-      `SELECT AVG(user_rating) as avg_rating, COUNT(*) as count FROM ai_performance WHERE model = ?`,
-      [model]
-    );
-
-    if (rows.length > 0) {
-      const avgRating = rows[0].avg_rating || 0;
-      const count = rows[0].count || 0;
-      const today = new Date().toISOString().slice(0, 10);
-      await runQuery(
-        `INSERT INTO ai_metrics_history (model, date, avg_rating, response_count, created_at)
-         VALUES (?, ?, ?, ?, ?)`,
-        [model, today, avgRating, count, new Date().toISOString()]
-      );
-    }
-  } catch (error) {
-    console.error(`Erreur update metrics ${model}:`, error);
-  }
-}
-
-// L'IA peut proposer ses propres commandes dynamiques
-// proposeCustomCommand() - REMOVED (dead code, never called)
-
-async function evaluateSelfPerformance(model, question, response) {
-  try {
-    // L'IA analyse sa propre réponse selon ses critères
-    // Pas de modèle externe - elle utilise sa propre intelligence
-    
-    // Critères d'auto-évaluation:
-    // - Longueur appropriée (pas trop court/long)
-    const lengthScore = response.length > 20 && response.length < 500 ? 1 : 0.5;
-    
-    // - Cohérence (pas d'erreurs évidentes, pas de répétitions)
-    const hasRepetition = /(.{20,})\1/.test(response);
-    const coherenceScore = hasRepetition ? 0.3 : 1;
-    
-    // - Pertinence (contient des mots de la question)
-    const questionWords = question.toLowerCase().split(/\s+/).filter(w => w.length > 4);
-    const responseWords = response.toLowerCase();
-    const relevanceCount = questionWords.filter(w => responseWords.includes(w)).length;
-    const relevanceScore = Math.min(1, relevanceCount / Math.max(1, questionWords.length * 0.3));
-    
-    // - Confiance (absence de mots d'hésitation)
-    const hesitationWords = ['peut-être', 'probablement', 'je pense', 'je crois', 'pas sûr'];
-    const hasHesitation = hesitationWords.some(w => response.toLowerCase().includes(w));
-    const confidenceScore = hasHesitation ? 0.7 : 1;
-    
-    // Score final (1-5)
-    const finalScore = Math.round(
-      (lengthScore * 1.5 + coherenceScore * 1.5 + relevanceScore * 1.5 + confidenceScore * 0.5) / 5 * 5
-    );
-    
-    return Math.max(1, Math.min(5, finalScore));
-  } catch (error) {
-    console.error('Erreur auto-évaluation:', error);
-    return 3; // Neutre par défaut
-  }
-}
-
-// generateAIReflection() - REMOVED (dead code, never called)
-
-
-
 // === SUPER BRAIN: Observation & Learning System ===
-
-// Cache mémoire pour ultra-rapidité
-const brainCache = {
-  knowledge: new Map(),
-  patterns: new Map(),
-  lastRefresh: new Map()
-};
-
-const CACHE_DURATION_MS = 60000; // 1 minute
-
-// getBrainKnowledgeCached() - REMOVED (dead code, never called)
 
 async function observeMessage(model, message) {
   try {
@@ -2516,60 +2331,6 @@ async function learnContextKnowledge(model, contextType, contextId, knowledge) {
     }
   } catch (error) {
     console.error(`Erreur learn context ${model}:`, error);
-  }
-}
-
-async function getBrainKnowledge(model) {
-  try {
-    // Compile toutes ses connaissances pour le prompt (ultra-optimisé avec indexes)
-    const observations = await allQuery(
-      `SELECT * FROM brain_observations WHERE model = ? ORDER BY importance DESC, created_at DESC LIMIT 50`,
-      [model]
-    );
-
-    const patterns = await allQuery(
-      `SELECT * FROM brain_member_patterns WHERE model = ? ORDER BY observation_count DESC LIMIT 20`,
-      [model]
-    );
-
-    const relationships = await allQuery(
-      `SELECT * FROM brain_relationships WHERE model = ? ORDER BY strength DESC LIMIT 30`,
-      [model]
-    );
-
-    const contextKnowledge = await allQuery(
-      `SELECT * FROM brain_context_knowledge WHERE model = ? ORDER BY updated_at DESC LIMIT 10`,
-      [model]
-    );
-
-    let knowledge = '\n\nCONNAISSANCES ACQUISES PAR TON CERVEAU:\n';
-
-    if (patterns.length > 0) {
-      knowledge += '\nPATTERNS DE MEMBRES:\n';
-      for (const p of patterns.slice(0, 5)) {
-        const data = JSON.parse(p.pattern_data);
-        knowledge += `- User ${p.user_id}: Actif vers ${data.active_hour}h, messages ~${data.avg_message_length} chars\n`;
-      }
-    }
-
-    if (relationships.length > 0) {
-      knowledge += '\nRELATIONS DÉTECTÉES:\n';
-      for (const r of relationships.slice(0, 5)) {
-        knowledge += `- ${r.user_a} ↔ ${r.user_b}: force ${(r.strength * 100).toFixed(0)}%\n`;
-      }
-    }
-
-    if (contextKnowledge.length > 0) {
-      knowledge += '\nCONTEXTE:\n';
-      for (const c of contextKnowledge.slice(0, 3)) {
-        knowledge += `- ${c.context_type} ${c.context_id}: ${c.knowledge.substring(0, 100)}\n`;
-      }
-    }
-
-    return knowledge;
-  } catch (error) {
-    console.error(`Erreur get brain knowledge ${model}:`, error);
-    return '';
   }
 }
 
@@ -2948,50 +2709,6 @@ Si le créateur demande quelque chose, TU EXÉCUTES en incluant le code d'action
   }
 }
 
-// Get OpenAI response for assistant (kept for other features)
-// getOpenaiAssistantResponse() - REMOVED (dead code, replaced by getAIAssistantResponse)
-
-// getGrokAssistantResponse() - REMOVED (dead code, replaced by getAIAssistantResponse)
-
-// mergeAssistantResponses() - REMOVED (dead code, never called)
-
-// tryExecuteAssistantAction() - REMOVED (dead code, never called)
-
-// Generate IA refusal response for unauthorized action requests
-async function generateAndSendRefusalResponse(message, actionName, creatorMention) {
-  try {
-    const systemPrompt = `T'es un assistant IA humain et poli. Quelqu'un vient de te demander une action (${actionName}) que seul ${creatorMention} peut faire.
-
-Tu dois:
-- Refuser poliment et naturellement 
-- Expliquer que tu dois être contrôlé par ${creatorMention} et personne d'autre pour les actions
-- Proposer à l'utilisateur de demander à ${creatorMention} ou tu peux l'appeler pour lui
-- Sois conversationnel, pas formel
-- Utilise "haha", des points d'exclamation, sois friendly
-
-Mentionne bien ${creatorMention} pour que cette personne reçoive une notif.
-
-Sois court, max 2-3 phrases!`;
-
-    const response = await openai.chat.completions.create({
-      model: 'gpt-5.2',
-      messages: [
-        { role: 'system', content: systemPrompt },
-        { role: 'user', content: `quelqu'un te demande de ${actionName}` }
-      ],
-      max_completion_tokens: 300,
-      temperature: 0.85
-    });
-
-    const refusalMsg = response.choices[0].message.content.trim();
-    await message.channel.send(refusalMsg);
-  } catch (error) {
-    console.error('❌ Erreur génération refusal:', error);
-    // Fallback à message hard-codé
-    await message.channel.send(`tu peux demander à ${creatorMention} de faire ça, moi j'peux pas le faire directement. c'est ${creatorMention} qui me contrôle!`);
-  }
-}
-
 // Bulk delete messages
 async function bulkDeleteMessages(message, count) {
   try {
@@ -3058,134 +2775,6 @@ async function executePendingAssistantAction(message, pendingAction) {
     const durationMinutes = Math.max(1, Number(pendingAction.duration) || 1);
     await member.timeout(durationMinutes * 60 * 1000, 'Muted by assistant (confirmed)');
     await message.channel.send(`✅ <@${pendingAction.userId}> mute ${durationMinutes} min.`);
-  }
-}
-
-// Delete action - deletes last message or replying to message
-async function executeDeleteAction(message) {
-  try {
-    // Only creator can execute
-    if (message.author.id !== config.creatorId) return;
-
-    // If replying to a message, delete that message
-    if (message.reference) {
-      const repliedTo = await message.channel.messages.fetch(message.reference.messageId);
-      await repliedTo.delete();
-      await message.channel.send('✅ Message supprimé');
-      return;
-    }
-
-    // Otherwise delete last message in channel
-    const messages = await message.channel.messages.fetch({ limit: 2 });
-    const toDelete = Array.from(messages.values())[1]; // Skip the current message
-    if (toDelete) {
-      await toDelete.delete();
-      await message.channel.send('✅ Message supprimé');
-    }
-  } catch (error) {
-    console.error('❌ Erreur delete:', error);
-    await message.channel.send('❌ Impossible de supprimer ce message');
-  }
-}
-
-// Monitor action - track a user's messages
-async function executeMonitorAction(message, question) {
-  try {
-    // Only creator can execute
-    if (message.author.id !== config.creatorId) return;
-
-    // Try to extract mention or username
-    const match = question.match(/<@!?(\d+)>/) || question.match(/@(\w+)/);
-    if (!match) {
-      await message.channel.send('⚠️ j\'ai pas trouvé d\'utilisateur à surveiller. Mentionne quelqu\'un!');
-      return;
-    }
-
-    const userId = match[1];
-    if (!userId) {
-      await message.channel.send('⚠️ utilisateur non trouvé');
-      return;
-    }
-
-    // Create a monitor entry in memory (simple implementation)
-    if (!global.monitoredUsers) global.monitoredUsers = new Map();
-    global.monitoredUsers.set(userId, { channelId: message.channelId, since: new Date() });
-
-    await message.channel.send(`✅ ok j\'ai commencé à surveiller <@${userId}>`);
-    console.log(`🔍 Monitoring user ${userId} in channel ${message.channelId}`);
-  } catch (error) {
-    console.error('❌ Erreur monitor:', error);
-    await message.channel.send('❌ Erreur lors de la surveillance');
-  }
-}
-
-// Ban action - ban a user
-async function executeBanAction(message, question) {
-  try {
-    // Only creator can execute
-    if (message.author.id !== config.creatorId) return;
-
-    const match = question.match(/<@!?(\d+)>/) || question.match(/@(\w+)/);
-    if (!match) {
-      await message.channel.send('⚠️ j\'ai pas trouvé d\'utilisateur. Mentionne quelqu\'un!');
-      return;
-    }
-
-    const userId = match[1];
-    const member = await message.guild.members.fetch(userId);
-    if (!member) {
-      await message.channel.send('❌ utilisateur non trouvé');
-      return;
-    }
-
-    await member.ban({ reason: 'Banned by assistant' });
-    await message.channel.send(`✅ <@${userId}> a été banni`);
-    console.log(`🚫 User ${userId} banned`);
-  } catch (error) {
-    console.error('❌ Erreur ban:', error);
-    await message.channel.send('❌ Erreur lors du bannissement');
-  }
-}
-
-// Clear action - bulk delete messages
-async function executeClearAction(message, question) {
-  try {
-    // Only creator can execute
-    if (message.author.id !== config.creatorId) return;
-
-    const match = question.match(/(\d+)/);
-    let count = match ? parseInt(match[1]) : 10;
-    count = Math.min(count, 100); // Max 100
-
-    const messages = await message.channel.messages.fetch({ limit: count + 1 });
-    const toDelete = Array.from(messages.values()).slice(1); // Skip current
-
-    await message.channel.bulkDelete(toDelete);
-    await message.channel.send(`✅ ${toDelete.length} messages supprimés`);
-    console.log(`🗑️ Cleared ${toDelete.length} messages`);
-  } catch (error) {
-    console.error('❌ Erreur clear:', error);
-    await message.channel.send('❌ Erreur lors du nettoyage');
-  }
-}
-
-// Mute action - lock channel or manage permissions
-async function executeMuteAction(message, question) {
-  try {
-    // Only creator can execute
-    if (message.author.id !== config.creatorId) return;
-
-    const isMuteEveryone = /mute|lock|silence|ferme/i.test(question);
-    
-    if (isMuteEveryone) {
-      await message.channel.permissionOverwrites.edit(message.guild.roles.everyone, {
-        SendMessages: false
-      });
-      await message.channel.send('✅ canal verrouillé');
-    }
-  } catch (error) {
-    console.error('❌ Erreur mute:', error);
-    await message.channel.send('❌ Erreur lors du verrouillage');
   }
 }
 
@@ -3888,51 +3477,6 @@ client.on('voiceStateUpdate', async (oldState, newState) => {
     });
   }
 });
-
-// === FONCTION: Envoyer les erreurs au channel threadChannelIds ===
-// Fonction pour logger les erreurs uniquement dans le channel approprié
-async function logErrorToChannel(errorMessage) {
-  try {
-    const guild = client.guilds.cache.first();
-    if (!guild) return;
-
-    // Chercher un channel parmi threadChannelIds
-    const threadChannels = config.threadChannelIds || [];
-    let targetChannel = null;
-
-    for (const channelId of threadChannels) {
-      const ch = guild.channels.cache.get(channelId);
-      if (ch && ch.type === 0) { // 0 = TextChannel
-        targetChannel = ch;
-        break;
-      }
-    }
-
-    if (!targetChannel) {
-      // Fallback: chercher un channel général
-      targetChannel = guild.channels.cache.find(ch => 
-        ch.type === 0 && 
-        (ch.name.includes('général') || ch.name.includes('general') || ch.name.includes('error') || ch.name.includes('log'))
-      ) || guild.channels.cache.find(ch => ch.type === 0);
-    }
-
-    if (targetChannel && targetChannel.permissionsFor(guild.members.me)?.has(PermissionsBitField.Flags.SendMessages)) {
-      // Formater le message d'erreur
-      const embed = {
-        color: 0xe74c3c, // Couleur rouge pour les erreurs
-        title: '❌ Erreur Détectée',
-        description: errorMessage,
-        timestamp: new Date().toISOString(),
-        footer: { text: 'M-Yra Error Logger' }
-      };
-      
-      await targetChannel.send({ embeds: [embed] });
-    }
-  } catch (err) {
-    // Silencieusement échouer - ne pas créer de boucle infinie
-    originalConsoleError('⚠️ Erreur lors du logging d\'erreur:', err.message);
-  }
-}
 
 // === DÉSACTIVÉ: Fonctionnalité de messages spontanés supprimée ===
 // Messages spontanés et introspection périodique supprimés pour garder un ton cohérent

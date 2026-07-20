@@ -327,49 +327,6 @@ async function initializeDatabase() {
     )
   `);
 
-  // Game state cache for performance
-  await runQuery(`
-    CREATE TABLE IF NOT EXISTS game_state_cache (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      channel_id TEXT NOT NULL,
-      game_type TEXT NOT NULL,
-      state_data TEXT NOT NULL,
-      created_at TEXT,
-      updated_at TEXT,
-      expires_at TEXT,
-      UNIQUE(channel_id, game_type)
-    )
-  `);
-
-  // Word validation cache
-  await runQuery(`
-    CREATE TABLE IF NOT EXISTS word_validation_cache (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      word1 TEXT NOT NULL,
-      word2 TEXT NOT NULL,
-      is_valid INTEGER,
-      validation_type TEXT,
-      created_at TEXT,
-      expires_at TEXT,
-      UNIQUE(word1, word2)
-    )
-  `);
-
-  // AI brain cache
-  await runQuery(`
-    CREATE TABLE IF NOT EXISTS ai_brain_cache (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      model TEXT NOT NULL,
-      cache_key TEXT NOT NULL,
-      cache_data TEXT NOT NULL,
-      created_at TEXT,
-      expires_at TEXT,
-      access_count INTEGER DEFAULT 0,
-      last_access TEXT,
-      UNIQUE(model, cache_key)
-    )
-  `);
-
   // Channel configuration (which feature goes to which channel)
   await runQuery(`
     CREATE TABLE IF NOT EXISTS channel_config (
@@ -438,81 +395,6 @@ async function initializeDatabase() {
     )
   `);
 
-  await runQuery(`
-    CREATE TABLE IF NOT EXISTS game_daily_chances (
-      guild_id TEXT NOT NULL,
-      user_id TEXT NOT NULL,
-      date_key TEXT NOT NULL,
-      chances_used INTEGER DEFAULT 0,
-      updated_at TEXT NOT NULL,
-      PRIMARY KEY (guild_id, user_id, date_key)
-    )
-  `);
-
-  await runQuery(`
-    CREATE TABLE IF NOT EXISTS game_sanctions (
-      guild_id TEXT NOT NULL,
-      user_id TEXT NOT NULL,
-      active INTEGER DEFAULT 1,
-      reason TEXT,
-      source TEXT,
-      created_at TEXT NOT NULL,
-      created_by TEXT,
-      lifted_at TEXT,
-      lifted_by TEXT,
-      PRIMARY KEY (guild_id, user_id)
-    )
-  `);
-
-  await runQuery(`
-    CREATE TABLE IF NOT EXISTS game_whitelist (
-      guild_id TEXT NOT NULL,
-      user_id TEXT NOT NULL,
-      source TEXT DEFAULT 'manual',
-      confidence REAL,
-      added_at TEXT NOT NULL,
-      added_by TEXT,
-      PRIMARY KEY (guild_id, user_id)
-    )
-  `);
-
-  await runQuery(`
-    CREATE TABLE IF NOT EXISTS game_infraction_events (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      guild_id TEXT NOT NULL,
-      channel_id TEXT,
-      user_id TEXT NOT NULL,
-      game_type TEXT NOT NULL,
-      event_type TEXT NOT NULL,
-      ai_confidence REAL,
-      confidence_level TEXT,
-      details TEXT,
-      created_at TEXT NOT NULL
-    )
-  `);
-
-  await runQuery(`
-    CREATE TABLE IF NOT EXISTS gage_monitoring (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      guild_id TEXT NOT NULL,
-      thread_id TEXT NOT NULL,
-      target_user_id TEXT NOT NULL,
-      assigned_by TEXT,
-      challenge_text TEXT,
-      started_at TEXT NOT NULL,
-      expires_at TEXT NOT NULL,
-      monitoring_type TEXT DEFAULT 'standard',
-      baseline_avatar_hash TEXT,
-      baseline_avatar_url TEXT,
-      avatar_changed INTEGER DEFAULT 0,
-      last_ai_confidence REAL,
-      last_ai_level TEXT,
-      last_ai_reason TEXT,
-      status TEXT DEFAULT 'active',
-      UNIQUE(guild_id, thread_id, target_user_id)
-    )
-  `);
-
   // Indexes pour performance ultra-rapide
   await runQuery(`CREATE INDEX IF NOT EXISTS idx_observations_model ON brain_observations(model, created_at DESC)`);
   await runQuery(`CREATE INDEX IF NOT EXISTS idx_patterns_model_user ON brain_member_patterns(model, user_id)`);
@@ -523,8 +405,6 @@ async function initializeDatabase() {
   await runQuery(`CREATE INDEX IF NOT EXISTS idx_memory_embeddings_memory_id ON memory_embeddings(memory_id)`);
   await runQuery(`CREATE INDEX IF NOT EXISTS idx_ai_request_logs_date ON ai_request_logs(created_at DESC)`);
   await runQuery(`CREATE INDEX IF NOT EXISTS idx_ai_request_logs_model_date ON ai_request_logs(model, created_at DESC)`);
-  await runQuery(`CREATE INDEX IF NOT EXISTS idx_game_infraction_recent ON game_infraction_events(guild_id, user_id, created_at DESC)`);
-  await runQuery(`CREATE INDEX IF NOT EXISTS idx_gage_monitoring_thread ON gage_monitoring(guild_id, thread_id, status)`);
 
   // Migration: Add missing columns to existing table
   try {

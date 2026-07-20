@@ -393,6 +393,35 @@ export const migrations = [
     down: async () => {
       logger.warn('⬇️ Migration 8 rollback not supported for SQLite column drops');
     }
+  },
+
+  {
+    version: 9,
+    name: 'Drop dead feature tables (game moderation, gage, caches, routing metrics)',
+    up: async () => {
+      logger.info('🔄 Migration 9: dropping dead feature tables');
+      const deadTables = [
+        'game_sanctions',
+        'game_whitelist',
+        'game_infraction_events',
+        'gage_monitoring',
+        'game_daily_chances',
+        'game_state_cache',
+        'word_validation_cache',
+        'ai_brain_cache',
+        'ai_routing_metrics',
+        'rate_limit_logs'
+      ];
+      await runQuery('DROP INDEX IF EXISTS idx_game_infraction_recent');
+      await runQuery('DROP INDEX IF EXISTS idx_gage_monitoring_thread');
+      for (const table of deadTables) {
+        await runQuery(`DROP TABLE IF EXISTS ${table}`);
+      }
+      logger.info('✅ Migration 9 complete');
+    },
+    down: async () => {
+      logger.warn('⬇️ Migration 9 rollback: tables mortes non recréées (features supprimées)');
+    }
   }
 ];
 
