@@ -1271,6 +1271,55 @@ async function handleStorySlashEnd(interaction) {
 
 // REMOVED: handleQuizCommand - using imported version from handlers/quiz.js
 
+// En conversation de groupe (plusieurs auteurs dans le salon/thread), donne au
+// modèle un annuaire clair des participants pour qu'il sache qui est qui et
+// s'adresse à la bonne personne (ex: mariage virtuel, jeu de rôle à plusieurs).
+async function buildParticipantsContext(message, recentMessages) {
+  if (!message.guild) {
+    return '';
+  }
+
+  const botId = message.client.user?.id;
+  const participants = new Map(); // discordId -> username
+  for (const m of recentMessages) {
+    const author = m.author;
+    if (!author || author.bot || author.id === botId) {
+      continue;
+    }
+    if (!participants.has(author.id)) {
+      participants.set(author.id, author.username);
+    }
+  }
+
+  // Tête-à-tête: pas besoin d'annuaire.
+  if (participants.size <= 1) {
+    return '';
+  }
+
+  const knownNames = new Map();
+  try {
+    const known = await listKnownMembers();
+    for (const row of known) {
+      knownNames.set(row.discord_id, row.real_name);
+    }
+  } catch {
+    // L'annuaire des vrais noms est optionnel.
+  }
+
+  const lines = [];
+  for (const [id, username] of participants) {
+    const realName = knownNames.get(id);
+    lines.push(`- ${username}${realName ? ` (vrai nom: ${realName})` : ''} — pour t'adresser à cette personne, mentionne <@${id}>`);
+  }
+
+  return [
+    '\n\n=== PARTICIPANTS DE LA CONVERSATION ===',
+    "Plusieurs personnes discutent ici. Dans le transcript, chaque ligne est préfixée par le pseudo de son auteur: sers-t'en pour savoir qui a dit quoi. Adresse-toi à la bonne personne, ne confonds jamais les participants, et mentionne-les avec leur tag Discord quand c'est utile (ex: pour marier deux personnes, garder le fil de qui répond à qui).",
+    lines.join('\n'),
+    `Le dernier message vient de: ${message.author.username}.`
+  ].join('\n');
+}
+
 // Handle AI Assistant - Auto-responds in dedicated thread with merged OpenAI + Grok responses
 async function handleAIAssistant(message) {
   try {
@@ -1299,6 +1348,10 @@ async function handleAIAssistant(message) {
     const contextMessages = isConversationCooldown
       ? `${message.author.username}: ${message.content}`
       : sortedMessages.map(m => `${m.author.username}: ${m.content}`).join('\n');
+
+    // Annuaire des participants (uniquement en conversation de groupe active).
+    const activeMessages = isConversationCooldown ? [message] : sortedMessages;
+    const participantsContext = await buildParticipantsContext(message, activeMessages);
 
     await extractAndStoreMemorySlots(message.author.id, userQuestion);
 
@@ -1432,7 +1485,7 @@ async function handleAIAssistant(message) {
       }
 
       // Get AI response with intelligent routing
-        const promptContext = contextMessages + memoryContext + codeContext;
+        const promptContext = contextMessages + memoryContext + participantsContext + codeContext;
       const startedAt = Date.now();
       const assistantResponse = await getAIAssistantResponse(userQuestion, promptContext, isCreator, message.author.id, message);
 
@@ -2047,7 +2100,7 @@ IDENTITÉ ET CONTEXTE
 • Nom: M-Yra
 • Créée par: Henergyque
 • Plateforme: Discord Bot hébergé sur Railway
-• Modèle Principal: Claude Opus 4.5
+• Modèle Principal: Claude Opus 4.8
 • Rôle: Assistant Intelligent et Direct
 
 DIRECTIVES FONDAMENTALES

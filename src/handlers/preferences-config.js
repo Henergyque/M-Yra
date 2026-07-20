@@ -9,7 +9,7 @@ export async function handleModelCommand(interaction) {
     await setUserPreference(userId, 'model', choice);
 
     const modelNames = {
-      opus: 'Claude Opus 4.6 (perfection)'
+      opus: 'Claude Opus 4.8 (perfection)'
     };
 
     const embed = {
@@ -45,7 +45,7 @@ export async function handlePreferencesCommand(interaction, options) {
       .setTitle('⚙️ Vos Préférences')
       .setColor(0x5865f2)
       .addFields(
-        { name: '🤖 Modèle IA', value: 'Claude Opus 4.6 (assistant only)', inline: true },
+        { name: '🤖 Modèle IA', value: 'Claude Opus 4.8 (assistant only)', inline: true },
         { name: '💬 Style', value: prefs.response_style || 'Normal', inline: true },
         { name: '🌐 Langue', value: prefs.language || 'Français', inline: true }
       )

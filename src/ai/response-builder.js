@@ -146,7 +146,9 @@ export class AIResponseBuilder {
   // ==================== CLAUDE ====================
   async executeClaudeRequest(model, message, options, breaker, timeout) {
     const { system, maxTokens, temperature } = options;
-    const claudeModel = model === 'opus' ? 'claude-opus-4-6' : 'claude-sonnet-4-5-20250929';
+    const claudeModel = model === 'opus' ? 'claude-opus-4-8' : 'claude-sonnet-4-5-20250929';
+    // Opus 4.8 rejette temperature (400). On ne l'envoie que pour les modèles qui l'acceptent.
+    const isOpus48 = claudeModel === 'claude-opus-4-8';
 
     return breaker.execute(
       async () => {
@@ -156,7 +158,7 @@ export class AIResponseBuilder {
               claude.messages.create({
                 model: claudeModel,
                 max_tokens: maxTokens,
-                temperature,
+                ...(isOpus48 ? {} : { temperature }),
                 system: system || 'Tu es un assistant IA utile et bienveillant.',
                 messages: [
                   { role: 'user', content: message }
@@ -185,9 +187,9 @@ export class AIResponseBuilder {
   }
 
   calculateClaudeCost(inputTokens, outputTokens, model) {
-    // Pricing as of Jan 2026
+    // Tarifs Anthropic: Opus 4.8 = $5/$25 par million, Sonnet = $3/$15 par million
     const pricing = {
-      'opus': { input: 0.000015, output: 0.000075 },
+      'opus': { input: 0.000005, output: 0.000025 },
       'sonnet': { input: 0.000003, output: 0.000015 }
     };
     const prices = pricing[model] || pricing.sonnet;
