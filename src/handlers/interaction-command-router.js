@@ -7,26 +7,6 @@ export async function dispatchChatInputCommand(interaction, context) {
     return true;
   }
 
-  if (commandName === 'play') {
-    await handlers.handlePlayCommand(interaction);
-    return true;
-  }
-
-  if (commandName === 'skip') {
-    await handlers.handleSkipCommand(interaction);
-    return true;
-  }
-
-  if (commandName === 'stop') {
-    await handlers.handleStopCommand(interaction);
-    return true;
-  }
-
-  if (commandName === 'queue') {
-    await handlers.handleQueueCommand(interaction);
-    return true;
-  }
-
   if (commandName === 'clear') {
     await handlers.handleClearCommand(interaction);
     return true;
@@ -94,11 +74,6 @@ export async function dispatchChatInputCommand(interaction, context) {
 
   if (commandName === 'automod-simple') {
     await handlers.handleAutoModSimpleCommand(interaction);
-    return true;
-  }
-
-  if (commandName === 'jeu-moderation') {
-    await handlers.handleGameModerationCommand(interaction, options);
     return true;
   }
 

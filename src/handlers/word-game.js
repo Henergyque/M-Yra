@@ -1,10 +1,9 @@
-import { ChannelType, EmbedBuilder, ThreadAutoArchiveDuration, ActionRowBuilder, ButtonBuilder, ButtonStyle } from 'discord.js';
+import { ChannelType, EmbedBuilder, ThreadAutoArchiveDuration } from 'discord.js';
 import { config } from '../config.js';
 import { getQuery, runQuery, allQuery } from '../db.js';
 import { openai } from '../ai/clients.js';
 import { getChannelForFeature } from '../utils/channel-helper.js';
 import { sendMaintenanceNotice } from '../utils/maintenance.js';
-import { applyGenericGameModerationDecision, isWhitelisted } from '../services/game-moderation.js';
 
 const wordGameLocks = new Map();
 const validatedPairs = new Map();
@@ -178,15 +177,6 @@ async function createWordGameErrorThread(message) {
   }
 }
 
-function createWordGameGageButtonRow(targetUserId) {
-  return new ActionRowBuilder().addComponents(
-    new ButtonBuilder()
-      .setCustomId(`gage:word-game:${targetUserId}`)
-      .setLabel('Gage donné')
-      .setStyle(ButtonStyle.Secondary)
-  );
-}
-
 export async function handleWordGame(message) {
   const wordGameChannelId = await getChannelForFeature('word_game', 'wordGameChannelId', config);
   if (message.channel.id !== wordGameChannelId) {
@@ -274,39 +264,13 @@ export async function handleWordGame(message) {
       await message.react('❌');
       const errorThread = await createWordGameErrorThread(message);
 
-      let moderationText = 'ℹ️ Erreur probable, aucune chance retirée.';
-      const whitelisted = await isWhitelisted(message.guild.id, message.author.id);
-      if (!whitelisted) {
-        const decision = await applyGenericGameModerationDecision({
-          guildId: message.guild.id,
-          channelId: message.channel.id,
-          userId: message.author.id,
-          gameType: 'word_game',
-          details: {
-            currentWord,
-            submittedWord: userWord,
-            explanation,
-            channelStreak
-          }
-        });
-        moderationText = `🧠 Détection sabotage: **${decision.level}** (${Math.round(decision.confidence * 100)}%) — ${decision.reason}`;
-        if (decision.consumed > 0) {
-          moderationText += `\n⚠️ Chance utilisée: **${decision.chanceState.used}/2**.`;
-        }
-        if (decision.sanctioned) {
-          moderationText += '\n⛔ Sanction jeux activée.';
-        }
-      } else {
-        moderationText = '✅ Membre whitelisté: aucune chance retirée.';
-      }
-
       const errorEmbed = new EmbedBuilder()
         .setTitle('❌ Mot Rejeté')
         .setDescription(
           `**${userWord}** n'est pas suffisamment lié à **${currentWord}**.\n\n` +
           `**Raison :** ${explanation}\n\n` +
           `Le streak de **${channelStreak}** mot${channelStreak > 1 ? 's' : ''} est perdu ! 😢\n` +
-          `L'historique des mots est réinitialisé.\nRelance en cours...\n\n${moderationText}`
+          `L'historique des mots est réinitialisé.\nRelance en cours...`
         )
         .setColor(0xff6b6b)
         .setTimestamp();
@@ -315,8 +279,7 @@ export async function handleWordGame(message) {
 
       if (errorThread) {
         await errorThread.send({
-          content: `🧷 Thread ouvert pour <@${message.author.id}>. Quand le gage est défini, clique sur le bouton pour lancer la surveillance.`,
-          components: [createWordGameGageButtonRow(message.author.id)]
+          content: `🧷 Thread ouvert pour <@${message.author.id}> : discutez du gage ici.`
         });
       }
 

@@ -47,3 +47,4 @@ build/
 # Testing
 .nyc_output/
 coverage/
+cookies.txt

@@ -1,14 +1,8 @@
-import { ChannelType, EmbedBuilder, ThreadAutoArchiveDuration, ActionRowBuilder, ButtonBuilder, ButtonStyle } from 'discord.js';
+import { ChannelType, EmbedBuilder, ThreadAutoArchiveDuration } from 'discord.js';
 import { config } from '../config.js';
 import { getQuery, runQuery } from '../db.js';
 import { getChannelForFeature } from '../utils/channel-helper.js';
 import { sendMaintenanceNotice } from '../utils/maintenance.js';
-import {
-  applyCountingModerationDecision,
-  applyGamesSanction,
-  consumeDailyChance,
-  isWhitelisted
-} from '../services/game-moderation.js';
 
 const countingLocks = new Map();
 const countingCache = new Map();
@@ -113,15 +107,6 @@ async function createCountingErrorThread(message) {
   }
 }
 
-function createCountingGageButtonRow(targetUserId) {
-  return new ActionRowBuilder().addComponents(
-    new ButtonBuilder()
-      .setCustomId(`gage:counting:${targetUserId}`)
-      .setLabel('Gage donné')
-      .setStyle(ButtonStyle.Secondary)
-  );
-}
-
 export async function handleCounting(message) {
   const lock = countingLocks.get(message.channel.id) ?? Promise.resolve();
   const nextLock = lock.then(async () => {
@@ -144,31 +129,12 @@ export async function handleCounting(message) {
     if (parsed === null) {
       const warningCount = await incrementFormatWarning(message.guild.id, message.author.id);
       const warningCycle = ((warningCount - 1) % 3) + 1;
-      const whitelisted = await isWhitelisted(message.guild.id, message.author.id);
 
-      let warningText = [
+      const warningText = [
         `${message.author} ⚠️ **Avertissement ${warningCycle}/3**`,
         'M-Yra IA: le salon counting accepte uniquement des chiffres.',
         'Pour discuter, utilise le thread du counting ou les salons dédiés.'
       ];
-
-      if (!whitelisted && warningCount % 3 === 0) {
-        const chanceState = await consumeDailyChance(message.guild.id, message.author.id, 1);
-        warningText.push(`⛔ 3 avertissements atteints: **1 chance retirée** (${chanceState.used}/2).`);
-
-        if (chanceState.exhausted) {
-          await applyGamesSanction(
-            message.guild.id,
-            message.author.id,
-            '2 chances quotidiennes épuisées (messages non numériques en counting)',
-            'counting_format_abuse',
-            'system'
-          );
-          warningText.push('⛔ Sanction jeux activée: accès bloqué jusqu\'à levée par commande owner.');
-        }
-      } else if (whitelisted && warningCount % 3 === 0) {
-        warningText.push('✅ Membre whitelisté: aucune chance retirée.');
-      }
 
       await message.channel.send(warningText.join('\n'));
       return true;
@@ -193,31 +159,6 @@ export async function handleCounting(message) {
       await message.react('❌');
       const errorThread = await createCountingErrorThread(message);
 
-      let moderationText = 'ℹ️ Erreur humaine probable, aucune chance retirée.';
-      const whitelisted = await isWhitelisted(message.guild.id, message.author.id);
-      if (!whitelisted && parsed !== null) {
-        const decision = await applyCountingModerationDecision({
-          guildId: message.guild.id,
-          channelId: message.channel.id,
-          userId: message.author.id,
-          expected: nextNumber,
-          submitted: parsed,
-          isSameUser
-        });
-
-        const confidencePercent = Math.round((decision.confidence || 0) * 100);
-        moderationText = `🧠 Détection sabotage: **${decision.level}** (${confidencePercent}%) — ${decision.reason}`;
-
-        if (decision.consumed > 0) {
-          moderationText += `\n⚠️ Chance utilisée: **${decision.chanceState.used}/2**.`;
-        }
-        if (decision.sanctioned) {
-          moderationText += '\n⛔ Sanction jeux activée: accès bloqué jusqu\'à levée par commande owner.';
-        }
-      } else if (whitelisted) {
-        moderationText = '✅ Membre whitelisté: aucune chance retirée.';
-      }
-
       const reasons = [];
       if (isSameUser) {
         reasons.push('Le même joueur ne peut pas jouer deux fois de suite.');
@@ -231,8 +172,7 @@ export async function handleCounting(message) {
           [
             ...reasons,
             'Le compteur repart à **1**.',
-            'À vous de décider du gage dans le thread.',
-            moderationText
+            'À vous de décider du gage dans le thread.'
           ].join('\n')
         )
         .setColor(0xff6b6b)
@@ -244,8 +184,7 @@ export async function handleCounting(message) {
 
       if (errorThread) {
         await errorThread.send({
-          content: `🧷 Thread ouvert pour <@${message.author.id}>. Quand le gage est fixé, clique sur le bouton pour lancer la surveillance.`,
-          components: [createCountingGageButtonRow(message.author.id)]
+          content: `🧷 Thread ouvert pour <@${message.author.id}> : discutez du gage ici.`
         });
       }
 

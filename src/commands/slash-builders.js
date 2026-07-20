@@ -36,35 +36,6 @@ export function buildSlashCommands() {
 
   commands.push(
     new SlashCommandBuilder()
-      .setName('play')
-      .setDescription('🎵 Jouer une musique (lien YouTube ou recherche) dans le vocal')
-      .addStringOption(opt =>
-        opt.setName('recherche')
-          .setDescription('Lien YouTube ou termes de recherche')
-          .setRequired(true)
-      )
-  );
-
-  commands.push(
-    new SlashCommandBuilder()
-      .setName('skip')
-      .setDescription('⏭️ Passer la musique en cours')
-  );
-
-  commands.push(
-    new SlashCommandBuilder()
-      .setName('stop')
-      .setDescription('⏹️ Arrêter la musique et quitter le vocal')
-  );
-
-  commands.push(
-    new SlashCommandBuilder()
-      .setName('queue')
-      .setDescription('📋 Voir la file d\'attente musicale')
-  );
-
-  commands.push(
-    new SlashCommandBuilder()
       .setName('clear')
       .setDescription('Supprimer des messages dans le salon')
       .addIntegerOption(opt =>
@@ -222,8 +193,7 @@ export function buildSlashCommands() {
                 { name: 'Thread Auto-Create', value: 'thread_create' },
                 { name: 'Word Game', value: 'word_game' },
                 { name: 'Quiz', value: 'quiz' },
-                { name: 'Error Logs', value: 'error_logs' },
-                { name: 'Musique (vocal)', value: 'music' }
+                { name: 'Error Logs', value: 'error_logs' }
               )
               .setRequired(true)
           )
@@ -247,8 +217,7 @@ export function buildSlashCommands() {
                 { name: 'Thread Auto-Create', value: 'thread_create' },
                 { name: 'Word Game', value: 'word_game' },
                 { name: 'Quiz', value: 'quiz' },
-                { name: 'Error Logs', value: 'error_logs' },
-                { name: 'Musique (vocal)', value: 'music' }
+                { name: 'Error Logs', value: 'error_logs' }
               )
               .setRequired(true)
           )
@@ -338,70 +307,6 @@ export function buildSlashCommands() {
           .setDescription('Mot-clé à bloquer (requis pour setup)')
           .setRequired(false)
           .setMaxLength(60)
-      )
-  );
-
-  commands.push(
-    new SlashCommandBuilder()
-      .setName('jeu-moderation')
-      .setDescription('🎮 Gérer sanctions jeux, whitelist et gages (owner)')
-      .addSubcommand(sub =>
-        sub.setName('sanction-status')
-          .setDescription('Voir le statut sanction d\'un membre')
-          .addUserOption(opt =>
-            opt.setName('user')
-              .setDescription('Membre cible')
-              .setRequired(true)
-          )
-      )
-      .addSubcommand(sub =>
-        sub.setName('sanction-lift')
-          .setDescription('Lever une sanction jeux')
-          .addUserOption(opt =>
-            opt.setName('user')
-              .setDescription('Membre cible')
-              .setRequired(true)
-          )
-      )
-      .addSubcommand(sub =>
-        sub.setName('whitelist-add')
-          .setDescription('Ajouter un membre en whitelist')
-          .addUserOption(opt =>
-            opt.setName('user')
-              .setDescription('Membre cible')
-              .setRequired(true)
-          )
-      )
-      .addSubcommand(sub =>
-        sub.setName('whitelist-remove')
-          .setDescription('Retirer un membre de la whitelist')
-          .addUserOption(opt =>
-            opt.setName('user')
-              .setDescription('Membre cible')
-              .setRequired(true)
-          )
-      )
-      .addSubcommand(sub =>
-        sub.setName('whitelist-status')
-          .setDescription('Voir si un membre est en whitelist')
-          .addUserOption(opt =>
-            opt.setName('user')
-              .setDescription('Membre cible')
-              .setRequired(true)
-          )
-      )
-      .addSubcommand(sub =>
-        sub.setName('whitelist-list')
-          .setDescription('Lister la whitelist')
-      )
-      .addSubcommand(sub =>
-        sub.setName('gage-complete')
-          .setDescription('Marquer un gage accompli et purger son suivi')
-          .addUserOption(opt =>
-            opt.setName('user')
-              .setDescription('Membre cible')
-              .setRequired(true)
-          )
       )
   );
 
