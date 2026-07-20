@@ -25,9 +25,4 @@ const mistral = new Mistral({
   apiKey: config.mistralApiKey
 });
 
-const perplexity = new OpenAI({
-  apiKey: config.perplexityApiKey,
-  baseURL: 'https://api.perplexity.ai'
-});
-
-export { openai, grok, claude, geminiModel, mistral, perplexity };
+export { openai, grok, claude, geminiModel, mistral };

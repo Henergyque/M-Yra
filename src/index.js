@@ -40,7 +40,7 @@ import {
   getUserMemorySlots,
   extractAndStoreMemorySlots
 } from './brain/memory.js';
-import { openai, grok, claude, geminiModel, mistral, perplexity } from './ai/clients.js';
+import { openai, grok, claude, geminiModel, mistral } from './ai/clients.js';
 import { aiResponseBuilder } from './ai/response-builder.js';
 import { handleCounting, setCountingState } from './handlers/counting.js';
 import { handleConfession, handleAdminConfessionLookup } from './handlers/confession.js';
@@ -102,6 +102,7 @@ const debateState = new Map();
 const memberProfileUpsertAt = new Map();
 const serverInfoUpsertAt = new Map();
 const pendingAssistantActions = new Map();
+const webSearchCooldown = new Map(); // userId/channelId -> timestamp dernière recherche web
 const MEMBER_PROFILE_UPSERT_MS = 15_000;
 const SERVER_INFO_UPSERT_MS = 60_000;
 const ASSISTANT_ACTION_CONFIRM_TTL_MS = 2 * 60 * 1000;
@@ -1271,14 +1272,8 @@ async function handleStorySlashEnd(interaction) {
 
 // REMOVED: handleQuizCommand - using imported version from handlers/quiz.js
 
-// En conversation de groupe (plusieurs auteurs dans le salon/thread), donne au
-// modèle un annuaire clair des participants pour qu'il sache qui est qui et
-// s'adresse à la bonne personne (ex: mariage virtuel, jeu de rôle à plusieurs).
-async function buildParticipantsContext(message, recentMessages) {
-  if (!message.guild) {
-    return '';
-  }
-
+// Collecte les auteurs humains distincts des messages récents (hors bots).
+function collectParticipants(message, recentMessages) {
   const botId = message.client.user?.id;
   const participants = new Map(); // discordId -> username
   for (const m of recentMessages) {
@@ -1290,9 +1285,15 @@ async function buildParticipantsContext(message, recentMessages) {
       participants.set(author.id, author.username);
     }
   }
+  return participants;
+}
 
-  // Tête-à-tête: pas besoin d'annuaire.
-  if (participants.size <= 1) {
+// En conversation de groupe (plusieurs auteurs dans le salon/thread), donne au
+// modèle un annuaire clair des participants pour qu'il sache qui est qui et
+// s'adresse à la bonne personne (ex: mariage virtuel, jeu de rôle à plusieurs).
+async function buildParticipantsContext(message, participants) {
+  // Tête-à-tête ou hors serveur: pas besoin d'annuaire.
+  if (!message.guild || participants.size <= 1) {
     return '';
   }
 
@@ -1309,15 +1310,33 @@ async function buildParticipantsContext(message, recentMessages) {
   const lines = [];
   for (const [id, username] of participants) {
     const realName = knownNames.get(id);
-    lines.push(`- ${username}${realName ? ` (vrai nom: ${realName})` : ''} — pour t'adresser à cette personne, mentionne <@${id}>`);
+    lines.push(`- ${username}${realName ? ` (vrai nom: ${realName})` : ''} — pour t'adresser à cette personne, écris exactement <@${id}>`);
   }
 
   return [
     '\n\n=== PARTICIPANTS DE LA CONVERSATION ===',
-    "Plusieurs personnes discutent ici. Dans le transcript, chaque ligne est préfixée par le pseudo de son auteur: sers-t'en pour savoir qui a dit quoi. Adresse-toi à la bonne personne, ne confonds jamais les participants, et mentionne-les avec leur tag Discord quand c'est utile (ex: pour marier deux personnes, garder le fil de qui répond à qui).",
+    "Plusieurs personnes discutent ici. Dans le transcript, chaque ligne est préfixée par le pseudo de son auteur: sers-t'en pour savoir qui a dit quoi. Adresse-toi à la bonne personne, ne confonds jamais les participants. Pour mentionner quelqu'un, écris son tag Discord EXACTEMENT sous la forme <@identifiant> (avec l'identifiant numérique ci-dessus), jamais @pseudo.",
     lines.join('\n'),
     `Le dernier message vient de: ${message.author.username}.`
   ].join('\n');
+}
+
+// Le modèle reproduit souvent mal la syntaxe Discord (@Pseudo, ou <@Pseudo> avec
+// le pseudo au lieu de l'identifiant), ce qui s'affiche en texte brut. On
+// réécrit ces formes en vraies mentions à partir de l'annuaire des participants.
+function applyParticipantMentions(text, participants) {
+  if (!text || !participants || participants.size === 0) {
+    return text;
+  }
+  let out = text;
+  for (const [id, username] of participants) {
+    const escaped = username.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    // <@Pseudo> ou <@!Pseudo> (pseudo au lieu de l'id) -> <@id>
+    out = out.replace(new RegExp(`<@!?${escaped}>`, 'gi'), `<@${id}>`);
+    // @Pseudo en texte brut -> <@id> (sans casser une mention <@id> déjà valide ni un email)
+    out = out.replace(new RegExp(`(^|[^\\w<@])@${escaped}\\b`, 'gi'), `$1<@${id}>`);
+  }
+  return out;
 }
 
 // Handle AI Assistant - Auto-responds in dedicated thread with merged OpenAI + Grok responses
@@ -1333,11 +1352,14 @@ async function handleAIAssistant(message) {
 
     // === Regular AI Response ===
 
-    // Fetch last 10 messages for context
-    const messages = await message.channel.messages.fetch({ limit: 11 });
+    // Fenêtre de contexte configurable (ASSISTANT_CONTEXT_MESSAGES, défaut 50,
+    // max Discord 100). Plus large = plus cohérent en groupe mais un peu plus
+    // cher/lent. Ajustable 5 par 5 via l'env sans toucher au code.
+    const contextWindow = config.assistantContextMessages || 30;
+    const messages = await message.channel.messages.fetch({ limit: Math.min(100, contextWindow + 1) });
     const sortedMessages = Array.from(messages.values())
       .reverse()
-      .slice(0, 10);
+      .slice(0, contextWindow);
 
     const previousMessage = sortedMessages.filter(m => m.id !== message.id).at(-1) || null;
     const cooldownMs = Math.max(1, config.assistantConversationCooldownMinutes || 90) * 60 * 1000;
@@ -1351,7 +1373,8 @@ async function handleAIAssistant(message) {
 
     // Annuaire des participants (uniquement en conversation de groupe active).
     const activeMessages = isConversationCooldown ? [message] : sortedMessages;
-    const participantsContext = await buildParticipantsContext(message, activeMessages);
+    const conversationParticipants = collectParticipants(message, activeMessages);
+    const participantsContext = await buildParticipantsContext(message, conversationParticipants);
 
     await extractAndStoreMemorySlots(message.author.id, userQuestion);
 
@@ -1487,7 +1510,7 @@ async function handleAIAssistant(message) {
       // Get AI response with intelligent routing
         const promptContext = contextMessages + memoryContext + participantsContext + codeContext;
       const startedAt = Date.now();
-      const assistantResponse = await getAIAssistantResponse(userQuestion, promptContext, isCreator, message.author.id, message);
+      let assistantResponse = await getAIAssistantResponse(userQuestion, promptContext, isCreator, message.author.id, message);
 
       if (!assistantResponse) {
         await logAIRequest({
@@ -1504,6 +1527,9 @@ async function handleAIAssistant(message) {
         await message.channel.send('❌ Erreur lors de la génération de la réponse.');
         return;
       }
+
+      // Réécrit les @pseudo / <@pseudo> en vraies mentions Discord <@id>.
+      assistantResponse = applyParticipantMentions(assistantResponse, conversationParticipants);
 
       await logAIRequest({
         userId: message.author.id,
@@ -2760,7 +2786,7 @@ DIRECTIVES ABSOLUES:
 
 MES CAPACITÉS RÉELLES:
 ✅ Conversation textuelle (réponses, conseils, explications)
-✅ Recherche web (via Perplexity avec sources citées)
+✅ Recherche web en temps réel (je cherche moi-même sur internet et je cite mes sources)
 ✅ Exécution de code (git, scripts, analyse)
 ✅ Analyse de fichiers (contenu, structure)
 ✅ Modération Discord (ban, kick, mute - créateur uniquement)
@@ -2769,7 +2795,6 @@ MES CAPACITÉS RÉELLES:
 
 MES LIMITES ABSOLUES:
 ❌ Génération d'images (DALL-E ou autre) - pas d'API image
-❌ Accès temps réel externe au-delà de Perplexity
 ❌ Modification de fichiers système (sécurité)
 ❌ Contenu nuisible, illégal ou offensant
 
@@ -2861,6 +2886,25 @@ Les actions du créateur ne sont JAMAIS refusées. JAMAIS d'hésitation, JAMAIS 
 Si le créateur demande quelque chose, TU EXÉCUTES en incluant le code d'action approprié.`;
     }
 
+    // Cooldown web search par utilisateur (long, volontaire) pour éviter le spam
+    // de recherches et les erreurs de quota. Si le cooldown n'est pas écoulé, on
+    // n'active pas l'outil: Claude répond alors depuis ses connaissances.
+    const searchCooldownMs = (config.assistantWebSearchCooldownSeconds || 0) * 1000;
+    const searchKey = userId || message?.channelId || 'global';
+    const lastSearchAt = webSearchCooldown.get(searchKey) || 0;
+    const webSearchAllowed = searchCooldownMs === 0 || (Date.now() - lastSearchAt) >= searchCooldownMs;
+
+    // Indicateur "recherche en cours" envoyé au moment où Claude lance
+    // réellement une recherche web (best-effort, une seule fois).
+    let searchNoticeSent = false;
+    const onWebSearch = () => {
+      if (searchNoticeSent || !message?.channel) {
+        return;
+      }
+      searchNoticeSent = true;
+      message.channel.send('🔍 Recherche en cours...').catch(() => {});
+    };
+
     // Use AIResponseBuilder with routing
     const fullPrompt = `${context}\n\n${question}`;
     const response = await aiResponseBuilder.getResponse(fullPrompt, {
@@ -2869,15 +2913,32 @@ Si le créateur demande quelque chose, TU EXÉCUTES en incluant le code d'action
       system: finalSystemPrompt,
       urgency: routing.urgency,
       maxTokens: 1024,
-      temperature: 0.7
+      temperature: 0.7,
+      enableWebSearch: webSearchAllowed,
+      onWebSearch
     });
+
+    // Démarre le cooldown seulement si une vraie recherche a eu lieu.
+    if (response.usedWebSearch) {
+      webSearchCooldown.set(searchKey, Date.now());
+    }
 
     // Track performance
     if (userId && message) {
       const mentionedUsers = message.mentions.users.map(u => ({ username: u.username, id: u.id })) || [];
       const username = message.author ? message.author.username : 'Unknown';
-      
+
       await saveConversationMemory(userId, question, response.content, message.channelId, mentionedUsers, username);
+    }
+
+    // Mémoire "à jour": si Claude a cherché sur le web, on garde une trace datée
+    // de ce qu'il a appris pour pouvoir s'en resservir / la rafraîchir plus tard.
+    if (response.usedWebSearch && response.content) {
+      const dateStr = new Date().toLocaleDateString('fr-FR', { timeZone: 'Europe/Paris' });
+      const learned = `[Recherche web du ${dateStr}] Q: ${question.slice(0, 200)} -> ${response.content.slice(0, 500)}`;
+      addMemory('web_search', learned, userId || 'system', null, userId || null).catch((error) => {
+        console.warn('⚠️ Mémorisation recherche web échouée:', error.message);
+      });
     }
 
     return response.content;

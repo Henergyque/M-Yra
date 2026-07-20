@@ -1,9 +1,22 @@
 import { Logger } from '../utils/logger.js';
 import { CircuitBreaker, retryWithBackoff, withTimeout, handleAPIError } from '../utils/error-handler.js';
 import { RateLimiter } from '../utils/rate-limiter.js';
-import { openai, grok, claude, geminiModel, mistral, perplexity } from './clients.js';
+import { openai, grok, claude, geminiModel, mistral } from './clients.js';
 
 const logger = new Logger('AI-RESPONSE-BUILDER');
+
+// Concatène uniquement les blocs texte d'une réponse Claude (ignore les blocs
+// server_tool_use / web_search_tool_result générés par la recherche web).
+function extractClaudeText(content) {
+  if (!Array.isArray(content)) {
+    return '';
+  }
+  return content
+    .filter(block => block.type === 'text')
+    .map(block => block.text || '')
+    .join('')
+    .trim();
+}
 
 /**
  * Unified AI Response Builder
@@ -18,7 +31,7 @@ export class AIResponseBuilder {
   }
 
   initializeBreakers() {
-    const models = ['opus', 'sonnet', 'mistral', 'grok', 'gemini', 'perplexity', 'openai'];
+    const models = ['opus', 'sonnet', 'mistral', 'grok', 'gemini', 'openai'];
     models.forEach(model => {
       this.circuitBreakers.set(model, new CircuitBreaker(model, 3, 60000));
     });
@@ -35,7 +48,9 @@ export class AIResponseBuilder {
       urgency = 'normal',
       context = {},
       maxTokens = 500,
-      temperature = 0.7
+      temperature = 0.7,
+      enableWebSearch = false,
+      onWebSearch = null
     } = options;
 
     const startTime = Date.now();
@@ -56,7 +71,9 @@ export class AIResponseBuilder {
         system,
         maxTokens,
         temperature,
-        urgency
+        urgency,
+        enableWebSearch,
+        onWebSearch
       });
 
       const responseTime = Date.now() - startTime;
@@ -76,6 +93,7 @@ export class AIResponseBuilder {
         model,
         tokens: response.tokens,
         cost: response.cost,
+        usedWebSearch: Boolean(response.usedWebSearch),
         responseTime
       };
 
@@ -111,17 +129,20 @@ export class AIResponseBuilder {
    * Execute request specific to each model
    */
   async executeModelRequest(model, message, options) {
-    const { system, maxTokens, temperature, urgency } = options;
+    const { system, maxTokens, temperature, urgency, enableWebSearch, onWebSearch } = options;
 
-    // Apply timeout based on urgency
-    const timeout = urgency === 'critical' ? 10000 : 30000;
+    // Apply timeout based on urgency. La recherche web prend du temps (aller
+    // chercher + lire les sources + rédiger): on laisse une large marge (120s)
+    // pour qu'elle ait le temps de chercher sans que la requête coupe avant la fin.
+    const baseTimeout = urgency === 'critical' ? 10000 : 30000;
+    const timeout = enableWebSearch ? Math.max(baseTimeout, 120000) : baseTimeout;
 
     const breaker = this.circuitBreakers.get(model);
 
     switch (model) {
       case 'opus':
       case 'sonnet':
-        return this.executeClaudeRequest(model, message, { system, maxTokens, temperature }, breaker, timeout);
+        return this.executeClaudeRequest(model, message, { system, maxTokens, temperature, enableWebSearch, onWebSearch }, breaker, timeout);
 
       case 'mistral':
         return this.executeMistralRequest(message, { system, maxTokens, temperature }, breaker, timeout);
@@ -131,9 +152,6 @@ export class AIResponseBuilder {
 
       case 'gemini':
         return this.executeGeminiRequest(message, { system, maxTokens, temperature }, breaker, timeout);
-
-      case 'perplexity':
-        return this.executePerplexityRequest(message, { system, maxTokens, temperature }, breaker, timeout);
 
       case 'openai':
         return this.executeOpenAIRequest(message, { system, maxTokens, temperature }, breaker, timeout);
@@ -145,33 +163,49 @@ export class AIResponseBuilder {
 
   // ==================== CLAUDE ====================
   async executeClaudeRequest(model, message, options, breaker, timeout) {
-    const { system, maxTokens, temperature } = options;
+    const { system, maxTokens, temperature, enableWebSearch, onWebSearch } = options;
     const claudeModel = model === 'opus' ? 'claude-opus-4-8' : 'claude-sonnet-4-5-20250929';
     // Opus 4.8 rejette temperature (400). On ne l'envoie que pour les modèles qui l'acceptent.
     const isOpus48 = claudeModel === 'claude-opus-4-8';
+    // Recherche web native de Claude (Opus 4.8 uniquement).
+    const useSearch = Boolean(enableWebSearch) && isOpus48;
+
+    const baseParams = {
+      model: claudeModel,
+      max_tokens: maxTokens,
+      ...(isOpus48 ? {} : { temperature }),
+      system: system || 'Tu es un assistant IA utile et bienveillant.',
+      messages: [
+        { role: 'user', content: message }
+      ]
+    };
 
     return breaker.execute(
       async () => {
         return retryWithBackoff(
           async () => {
+            // 1) Tentative avec recherche web (si activée). En cas d'indispo, on
+            //    retombe proprement sur une réponse sans outil plutôt que d'échouer.
+            if (useSearch) {
+              try {
+                return await this.runClaudeWithSearch(baseParams, onWebSearch, timeout, model);
+              } catch (searchError) {
+                logger.warn(`Recherche web indisponible, réponse sans recherche: ${searchError.message}`);
+              }
+            }
+
+            // 2) Appel simple sans outil.
             const response = await withTimeout(
-              claude.messages.create({
-                model: claudeModel,
-                max_tokens: maxTokens,
-                ...(isOpus48 ? {} : { temperature }),
-                system: system || 'Tu es un assistant IA utile et bienveillant.',
-                messages: [
-                  { role: 'user', content: message }
-                ]
-              }),
+              claude.messages.create(baseParams),
               timeout,
               model
             );
 
             return {
-              content: response.content[0]?.text || '',
+              content: extractClaudeText(response.content),
               tokens: (response.usage?.input_tokens || 0) + (response.usage?.output_tokens || 0),
-              cost: this.calculateClaudeCost(response.usage?.input_tokens, response.usage?.output_tokens, model)
+              cost: this.calculateClaudeCost(response.usage?.input_tokens, response.usage?.output_tokens, model),
+              usedWebSearch: false
             };
           },
           3,
@@ -184,6 +218,60 @@ export class AIResponseBuilder {
         return null;
       }
     );
+  }
+
+  // Appel Claude avec l'outil web_search natif. On stream pour détecter le
+  // moment exact où Claude lance une recherche (déclenche l'indicateur
+  // "recherche en cours"), puis on récupère la réponse finale.
+  async runClaudeWithSearch(baseParams, onWebSearch, timeout, model) {
+    const params = {
+      ...baseParams,
+      tools: [{ type: 'web_search_20260209', name: 'web_search', max_uses: 3 }]
+    };
+
+    let searchNotified = false;
+    const stream = claude.messages.stream(params);
+    stream.on('streamEvent', (event) => {
+      if (
+        !searchNotified &&
+        event?.type === 'content_block_start' &&
+        event.content_block?.type === 'server_tool_use' &&
+        event.content_block?.name === 'web_search'
+      ) {
+        searchNotified = true;
+        try {
+          onWebSearch?.();
+        } catch {
+          // L'indicateur est best-effort, on n'interrompt jamais la réponse.
+        }
+      }
+    });
+
+    let finalMsg = await withTimeout(stream.finalMessage(), timeout, model);
+
+    // Reprise si le serveur met le tour en pause (boucle d'outils longue).
+    let guard = 0;
+    let history = [{ role: 'user', content: baseParams.messages[0].content }];
+    while (finalMsg?.stop_reason === 'pause_turn' && guard < 2) {
+      guard += 1;
+      history = [...history, { role: 'assistant', content: finalMsg.content }];
+      finalMsg = await withTimeout(
+        claude.messages.create({ ...params, messages: history }),
+        timeout,
+        model
+      );
+    }
+
+    const usedWebSearch = searchNotified || (Array.isArray(finalMsg?.content) && finalMsg.content.some(
+      block => (block.type === 'server_tool_use' && block.name === 'web_search') || block.type === 'web_search_tool_result'
+    ));
+
+    return {
+      content: extractClaudeText(finalMsg?.content),
+      tokens: (finalMsg?.usage?.input_tokens || 0) + (finalMsg?.usage?.output_tokens || 0),
+      cost: this.calculateClaudeCost(finalMsg?.usage?.input_tokens, finalMsg?.usage?.output_tokens, model),
+      usedWebSearch
+    };
   }
 
   calculateClaudeCost(inputTokens, outputTokens, model) {
@@ -298,41 +386,6 @@ export class AIResponseBuilder {
           3,
           1000,
           'gemini'
-        );
-      }
-    );
-  }
-
-  // ==================== PERPLEXITY ====================
-  async executePerplexityRequest(message, options, breaker, timeout) {
-    const { system, maxTokens, temperature } = options;
-
-    return breaker.execute(
-      async () => {
-        return retryWithBackoff(
-          async () => {
-            const response = await withTimeout(
-              perplexity.chat.completions.create({
-                model: 'sonar-pro',
-                temperature,
-                max_tokens: maxTokens,
-                messages: [
-                  { role: 'user', content: message }
-                ]
-              }),
-              timeout,
-              'perplexity'
-            );
-
-            return {
-              content: response.choices[0]?.message?.content || '',
-              tokens: response.usage?.total_tokens || 0,
-              cost: (response.usage?.total_tokens || 0) * 0.0000035 // Estimated
-            };
-          },
-          3,
-          1000,
-          'perplexity'
         );
       }
     );

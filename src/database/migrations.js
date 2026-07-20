@@ -101,7 +101,7 @@ export const migrations = [
       `);
 
       // Initialize metrics for each model
-      const models = ['opus', 'sonnet', 'mistral', 'grok', 'gemini', 'perplexity', 'openai'];
+      const models = ['opus', 'sonnet', 'mistral', 'grok', 'gemini', 'openai'];
       for (const model of models) {
         await runQuery(`
           INSERT OR IGNORE INTO ai_routing_metrics (model, created_at, updated_at)

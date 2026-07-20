@@ -17,7 +17,7 @@ export class AIRouter {
   }
 
   initializeMetrics() {
-    const models = ['opus', 'sonnet', 'mistral', 'grok', 'gemini', 'perplexity', 'openai'];
+    const models = ['opus', 'sonnet', 'mistral', 'grok', 'gemini', 'openai'];
     models.forEach(model => {
       this.routingMetrics.set(model, {
         routedCount: 0,
@@ -152,10 +152,12 @@ Respond with JSON only, no other text.`;
     // Route based on intent
     switch (intent) {
       case 'research':
+        // Claude (Opus 4.8) fait la recherche web lui-même via son outil natif.
         return {
-          model: 'perplexity',
+          model: 'opus',
           urgency: 'high',
           reason: `RESEARCH (${reasoning})`,
+          enableWebSearch: true,
           fallback: ['gemini', 'sonnet']
         };
 
@@ -323,7 +325,6 @@ export function getModelPriority() {
     { name: 'mistral', tier: 'utility', speed: 'fast', cost: 'low', strengths: ['code', 'speed', 'validation'] },
     { name: 'grok', tier: 'specialty', speed: 'medium', cost: 'medium', strengths: ['humor', 'sarcasm', 'roasting'] },
     { name: 'gemini', tier: 'balanced', speed: 'medium', cost: 'free', strengths: ['images', 'knowledge', 'quiz'] },
-    { name: 'perplexity', tier: 'specialty', speed: 'slow', cost: 'free', strengths: ['research', 'news', 'sources'] },
     { name: 'openai', tier: 'balanced', speed: 'medium', cost: 'medium', strengths: ['debate', 'counter-arguments'] }
   ];
 }

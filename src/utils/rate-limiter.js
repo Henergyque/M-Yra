@@ -13,7 +13,6 @@ export class RateLimiter {
       opusMaxReqPerMin: config.opusMaxReqPerMin || 60,
       mistralMaxReqPerMin: config.mistralMaxReqPerMin || 100,
       geminiMaxReqPerDay: config.geminiMaxReqPerDay || 1500,
-      perplexityMaxReqPerDay: config.perplexityMaxReqPerDay || 1500,
       grokMaxReqPerDay: config.grokMaxReqPerDay || 10000,
       openaiMaxReqPerMin: config.openaiMaxReqPerMin || 60,
       ...config
@@ -24,7 +23,7 @@ export class RateLimiter {
   }
 
   initializeModels() {
-    const models = ['opus', 'sonnet', 'mistral', 'grok', 'gemini', 'perplexity', 'openai'];
+    const models = ['opus', 'sonnet', 'mistral', 'grok', 'gemini', 'openai'];
     models.forEach(model => {
       this.usage.set(model, {
         dailyTokens: 0,
@@ -87,15 +86,6 @@ export class RateLimiter {
         }
         break;
 
-      case 'perplexity':
-        if (stats.requestCount >= this.config.perplexityMaxReqPerDay) {
-          return {
-            allowed: false,
-            reason: 'PERPLEXITY_QUOTA_EXCEEDED',
-            fallback: 'mistral'
-          };
-        }
-        break;
 
       case 'grok':
         if (stats.requestCount >= this.config.grokMaxReqPerDay) {

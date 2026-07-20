@@ -60,7 +60,6 @@ export const config = {
   grokApiKey: requireEnv('GROK_API_KEY'),
   geminiApiKey: requireEnv('GEMINI_API_KEY'),
   mistralApiKey: requireEnv('MISTRAL_API_KEY'),
-  perplexityApiKey: requireEnv('PERPLEXITY_API_KEY'),
 
   // === DISCORD CHANNELS ===
   threadChannelIds: parseArray('THREAD_CHANNEL_IDS'),
@@ -81,12 +80,19 @@ export const config = {
     opusMaxReqPerMin: parseInt(process.env.OPUS_MAX_REQ_PER_MIN || '60'),
     mistralMaxReqPerMin: parseInt(process.env.MISTRAL_MAX_REQ_PER_MIN || '100'),
     geminiMaxReqPerDay: parseInt(process.env.GEMINI_MAX_REQ_PER_DAY || '1500'),
-    perplexityMaxReqPerDay: parseInt(process.env.PERPLEXITY_MAX_REQ_PER_DAY || '1500'),
     grokMaxReqPerDay: parseInt(process.env.GROK_MAX_REQ_PER_DAY || '10000'),
     openaiMaxReqPerMin: parseInt(process.env.OPENAI_MAX_REQ_PER_MIN || '60')
   },
 
   assistantConversationCooldownMinutes: parseInt(process.env.ASSISTANT_CONVERSATION_COOLDOWN_MINUTES || '90'),
+
+  // Taille de la fenêtre de contexte de l'assistant (nb de messages récents).
+  // Ajustable librement (ex: 5 par 5) via l'env sur Railway. Max Discord: 100.
+  assistantContextMessages: Math.min(100, Math.max(1, parseInt(process.env.ASSISTANT_CONTEXT_MESSAGES || '30', 10) || 30)),
+
+  // Cooldown (secondes) entre deux recherches web par utilisateur. Cooldown
+  // long volontaire pour éviter le spam de recherches et les erreurs de quota.
+  assistantWebSearchCooldownSeconds: Math.max(0, parseInt(process.env.ASSISTANT_WEB_SEARCH_COOLDOWN_SECONDS || '120', 10) || 120),
 
   // === SYSTEM ===
   environment: process.env.NODE_ENV || 'development',
