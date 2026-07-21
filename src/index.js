@@ -1316,6 +1316,41 @@ function applyParticipantMentions(text, participants) {
   return out;
 }
 
+// Garde-fous mémoire (anti-radotage). On normalise en minuscules sans ponctuation
+// pour comparer le fond, pas la forme.
+function normalizeMemoryText(text) {
+  return String(text || '')
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N}\s]/gu, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+// Sélectionne des lignes de mémoire à injecter en évitant: (1) les doublons entre
+// sources (une même info remontée par plusieurs requêtes), (2) une info déjà
+// présente dans la conversation récente (sinon elle la ressort en boucle), et en
+// respectant un budget global (plafond de lignes injectées).
+function selectMemoryLines(candidates, ctx) {
+  const out = [];
+  for (const raw of candidates) {
+    if (ctx.budget.count <= 0) break;
+    const text = String(raw || '').trim();
+    if (!text) continue;
+    const norm = normalizeMemoryText(text);
+    if (norm.length < 4) continue;
+    if (ctx.seen.has(norm)) continue; // doublon inter-sources
+    const tokens = norm.split(' ').filter(t => t.length > 3);
+    if (tokens.length > 0) {
+      const hits = tokens.filter(t => ctx.recentTokens.has(t)).length;
+      if (hits / tokens.length >= 0.85) continue; // déjà couvert par la conversation récente -> anti-écho
+    }
+    ctx.seen.add(norm);
+    out.push(text);
+    ctx.budget.count -= 1;
+  }
+  return out;
+}
+
 // Handle AI Assistant - Auto-responds in dedicated thread with merged OpenAI + Grok responses
 async function handleAIAssistant(message) {
   try {
@@ -1392,27 +1427,48 @@ async function handleAIAssistant(message) {
       }
     }
     
+    // Garde-fous: on plafonne le total de lignes mémoire injectées et on filtre
+    // les doublons + ce qui est déjà présent dans la conversation récente
+    // (anti-écho, pour ne pas radoter). Budget partagé entre les 3 sources.
+    // IMPORTANT: l'anti-écho ne regarde que les messages PRÉCÉDENTS, pas le
+    // message courant — sinon une info explicitement demandée serait filtrée à
+    // tort. Si l'utilisateur pose la question, le souvenir reste disponible.
+    const priorContext = sortedMessages
+      .filter(m => m.id !== message.id)
+      .map(m => `${m.author.username}: ${m.content}`)
+      .join('\n');
+    const memoryCtx = {
+      seen: new Set(),
+      recentTokens: new Set(normalizeMemoryText(priorContext).split(' ').filter(t => t.length > 3)),
+      budget: { count: 6 }
+    };
+
     // 1. Get memories about the current user
     if (userMemories.length > 0) {
-      memoryContext += `\n\nInfos sur ${message.author.username}:\n` + 
-        userMemories.slice(0, 3).map(m => `- ${m.content}`).join('\n');
+      const lines = selectMemoryLines(userMemories.map(m => m.content), memoryCtx);
+      if (lines.length > 0) {
+        memoryContext += `\n\nInfos sur ${message.author.username}:\n` +
+          lines.map(l => `- ${l}`).join('\n');
+      }
     }
-    
+
     // 2. Search memories related to question keywords
     if (keywordMemories.length > 0) {
-      memoryContext += `\n\nInfos pertinentes:\n` + 
-        keywordMemories.slice(0, 3).map(m => `- ${m.content}`).join('\n');
+      const lines = selectMemoryLines(keywordMemories.map(m => m.content), memoryCtx);
+      if (lines.length > 0) {
+        memoryContext += `\n\nInfos pertinentes:\n` +
+          lines.map(l => `- ${l}`).join('\n');
+      }
     }
 
     if (semanticMemories.length > 0) {
-      const semanticLines = semanticMemories
-        .slice(0, 3)
-        .map(memory => memory.content || memory.source_text)
-        .filter(Boolean)
-        .map(text => `- ${String(text).slice(0, 240)}`);
+      const lines = selectMemoryLines(
+        semanticMemories.map(memory => memory.content || memory.source_text),
+        memoryCtx
+      ).map(text => String(text).slice(0, 240));
 
-      if (semanticLines.length > 0) {
-        memoryContext += `\n\nMémoire sémantique:\n${semanticLines.join('\n')}`;
+      if (lines.length > 0) {
+        memoryContext += `\n\nMémoire sémantique:\n${lines.map(l => `- ${l}`).join('\n')}`;
       }
     }
 

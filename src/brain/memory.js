@@ -70,15 +70,62 @@ async function upsertMemoryEmbedding(memoryId, userId, memoryType, sourceText) {
   );
 }
 
+// Empreinte de mots-clés (mots > 3 lettres, sans ponctuation) pour comparer le
+// fond de deux mémoires, pas leur formulation exacte.
+function memoryFingerprint(text) {
+  return new Set(
+    String(text || '')
+      .toLowerCase()
+      .replace(/[^\p{L}\p{N}\s]/gu, ' ')
+      .split(/\s+/)
+      .filter(t => t.length > 3)
+  );
+}
+
+function jaccardSimilarity(a, b) {
+  if (a.size === 0 || b.size === 0) return 0;
+  let inter = 0;
+  for (const t of a) if (b.has(t)) inter += 1;
+  return inter / (a.size + b.size - inter);
+}
+
+// Anti-doublon: cherche une mémoire durable quasi identique déjà stockée pour ce
+// même utilisateur/type, pour ne pas empiler 15 variantes du même fait (ce qui
+// pousse l'assistant à radoter).
+async function findDuplicateMemory(type, userId, content) {
+  const rows = await allQuery(
+    'SELECT id, content FROM memories WHERE type = ? AND ((user_id = ?) OR (user_id IS NULL AND ? IS NULL)) ORDER BY created_at DESC LIMIT 40',
+    [type, userId, userId]
+  );
+  const fp = memoryFingerprint(content);
+  if (fp.size === 0) return null;
+  for (const row of rows) {
+    if (jaccardSimilarity(fp, memoryFingerprint(row.content)) >= 0.7) {
+      return row;
+    }
+  }
+  return null;
+}
+
 // Memories CRUD
 async function addMemory(type, content, createdBy, subject = null, userId = null) {
   const createdAt = new Date().toISOString();
+  const indexed = !['conversation', 'vanne'].includes(type);
+
+  // Pour les mémoires durables (indexées), on évite les quasi-doublons.
+  if (indexed) {
+    const dup = await findDuplicateMemory(type, userId, content);
+    if (dup) {
+      return dup.id;
+    }
+  }
+
   const result = await runQuery(
     'INSERT INTO memories (type, subject, user_id, content, created_at, created_by) VALUES (?, ?, ?, ?, ?, ?)',
     [type, subject, userId, content, createdAt, createdBy]
   );
 
-  if (!['conversation', 'vanne'].includes(type)) {
+  if (indexed) {
     await upsertMemoryEmbedding(result.lastID, userId, type, `${subject || ''} ${content}`.trim());
   }
 
