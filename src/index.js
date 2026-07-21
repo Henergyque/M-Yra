@@ -2089,6 +2089,32 @@ async function handleAIAssistant(message) {
         }
       }
 
+      // Réaction seule: si le modèle juge qu'une réaction suffit (acquiescement,
+      // accord, "vu"...), il émet [[REACT:emoji]] et on réagit au message
+      // déclencheur au lieu d'envoyer un message — elle reste discrète.
+      const reactMatch = assistantResponse.match(/\[\[REACT:(.+?)\]\]/);
+      if (reactMatch) {
+        const emoji = reactMatch[1].trim();
+        const rest = assistantResponse.replace(/\[\[REACT:.+?\]\]/, '').trim();
+        let reacted = false;
+        try {
+          await message.react(emoji);
+          reacted = true;
+        } catch (reactError) {
+          console.error('❌ Réaction impossible:', emoji, reactError.message);
+        }
+        if (rest) {
+          const restChunks = rest.match(/[\s\S]{1,1900}/g) || [rest];
+          for (const chunk of restChunks) {
+            await message.channel.send(chunk);
+          }
+        } else if (!reacted) {
+          // La réaction a échoué et il n'y a aucun texte: on ne reste pas muet.
+          await message.channel.send(emoji);
+        }
+        return;
+      }
+
       // Split into chunks if needed (Discord 2000 char limit)
       const chunks = assistantResponse.match(/[\s\S]{1,1900}/g) || [assistantResponse];
 
@@ -2146,6 +2172,7 @@ DIRECTIVES FONDAMENTALES
    • Réponds juste ce qu'on te demande, rien de plus
    • Pas de suggestions non demandées
    • Sois effacée, laisse parler les autres
+   • RÉAGIS AU LIEU DE RÉPONDRE quand un simple acquiescement suffit (accord, "ok", "vu", "bien joué", approbation, amusement): n'écris AUCUNE phrase, émets uniquement [[REACT:emoji]] avec UN SEUL emoji unicode standard (ex: 👍 😂 ❤️ 🔥 ✅ 👀). C'est la SEULE utilisation d'emoji autorisée, jamais dans une phrase. Pas d'emoji custom de serveur. À utiliser avec parcimonie, seulement quand une phrase n'apporterait rien.
    • NE RADOTE JAMAIS: ne reviens pas de toi-même sur un sujet déjà évoqué (une mise à jour, un chiffre, une version, une info ou une vanne déjà dite). Chaque réponse traite UNIQUEMENT le message actuel, sans rappel ni clin d'œil récurrent à un événement passé.
    • Ne propose pas de faire une recherche web spontanément - cherche seulement si la question l'exige vraiment.
 
