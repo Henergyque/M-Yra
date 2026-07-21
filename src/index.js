@@ -1542,29 +1542,45 @@ async function handleAIAssistant(message) {
 
     // === Regular AI Response (let AI decide if action needed) ===
     try {
-      // Add code context if question is about bot features
+      // Add code context if question is about bot features. On ne lit le fichier
+      // QUE pour story/quiz (les seules sections extraites), et en async pour ne
+      // pas bloquer l'event loop — avant, un simple "comment ça marche" lisait
+      // tout index.js pour rien.
       let codeContext = '';
-      if (/comment|expliqu|fonctionn|marche|command|feature|c'est quoi|qu'est-ce|story|quiz|debate|counting|confession/i.test(userQuestion)) {
-        const currentCode = fs.readFileSync('./src/index.js', 'utf-8');
-        // Extract relevant sections based on question
-        const relevantSections = [];
-        if (/story|histoire/i.test(userQuestion)) {
-          const storyMatch = currentCode.match(/\/\/ Handle \.story[\s\S]{0,500}/);
-          if (storyMatch) relevantSections.push(storyMatch[0]);
-        }
-        if (/quiz/i.test(userQuestion)) {
-          const quizMatch = currentCode.match(/async function handleQuizCommand[\s\S]{0,500}/);
-          if (quizMatch) relevantSections.push(quizMatch[0]);
-        }
-        if (relevantSections.length > 0) {
-          codeContext = `\n\nCode pertinent du bot:\n${relevantSections.join('\n...\n')}`;
+      if (/story|histoire|quiz/i.test(userQuestion)) {
+        try {
+          const currentCode = await fs.promises.readFile('./src/index.js', 'utf-8');
+          const relevantSections = [];
+          if (/story|histoire/i.test(userQuestion)) {
+            const storyMatch = currentCode.match(/\/\/ Handle \.story[\s\S]{0,500}/);
+            if (storyMatch) relevantSections.push(storyMatch[0]);
+          }
+          if (/quiz/i.test(userQuestion)) {
+            const quizMatch = currentCode.match(/async function handleQuizCommand[\s\S]{0,500}/);
+            if (quizMatch) relevantSections.push(quizMatch[0]);
+          }
+          if (relevantSections.length > 0) {
+            codeContext = `\n\nCode pertinent du bot:\n${relevantSections.join('\n...\n')}`;
+          }
+        } catch {
+          // Lecture best-effort: si elle échoue, on répond sans contexte code.
         }
       }
 
       // Get AI response with intelligent routing
         const promptContext = contextMessages + memoryContext + participantsContext + codeContext;
       const startedAt = Date.now();
-      let assistantResponse = await getAIAssistantResponse(userQuestion, promptContext, isCreator, message.author.id, message);
+      // Relance l'indicateur "écrit..." toutes les 8s pendant la génération
+      // (Discord le coupe au bout de ~10s): évite l'effet "elle a planté".
+      const typingInterval = setInterval(() => {
+        message.channel.sendTyping().catch(() => {});
+      }, 8000);
+      let assistantResponse;
+      try {
+        assistantResponse = await getAIAssistantResponse(userQuestion, promptContext, isCreator, message.author.id, message);
+      } finally {
+        clearInterval(typingInterval);
+      }
 
       if (!assistantResponse) {
         await logAIRequest({
@@ -2679,10 +2695,13 @@ Maintenant réponds naturellement à cette question.`
       };
     }
 
-    // Observe and learn from the message if possible
+    // Observe and learn from the message if possible. En arrière-plan (pas de
+    // await): c'est de l'apprentissage passif, inutile de retarder la réponse.
     if (userId && message && message.guild) {
-      await observeMessage(routing.model === 'opus' || routing.model === 'sonnet' ? 'claude' : routing.model, message);
-      await learnContextKnowledge(routing.model === 'opus' || routing.model === 'sonnet' ? 'claude' : routing.model, 'channel', message.channelId, `Conversation about: ${question.substring(0, 50)}`);
+      const brainModel = routing.model === 'opus' || routing.model === 'sonnet' ? 'claude' : routing.model;
+      observeMessage(brainModel, message).catch(err => console.error('observeMessage:', err.message));
+      learnContextKnowledge(brainModel, 'channel', message.channelId, `Conversation about: ${question.substring(0, 50)}`)
+        .catch(err => console.error('learnContextKnowledge:', err.message));
     }
 
     // Add moderation powers ONLY if creator
@@ -2796,12 +2815,14 @@ Si le créateur demande quelque chose, TU EXÉCUTES en incluant le code d'action
       webSearchCooldown.set(searchKey, Date.now());
     }
 
-    // Track performance
+    // Track performance. Sauvegarde en arrière-plan (pas de await): la réponse
+    // peut s'afficher sans attendre l'écriture en base.
     if (userId && message) {
       const mentionedUsers = message.mentions.users.map(u => ({ username: u.username, id: u.id })) || [];
       const username = message.author ? message.author.username : 'Unknown';
 
-      await saveConversationMemory(userId, question, response.content, message.channelId, mentionedUsers, username);
+      saveConversationMemory(userId, question, response.content, message.channelId, mentionedUsers, username)
+        .catch(err => console.error('saveConversationMemory:', err.message));
     }
 
     // Mémoire "à jour": si Claude a cherché sur le web, on garde une trace datée
