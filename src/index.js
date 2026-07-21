@@ -1316,6 +1316,23 @@ function applyParticipantMentions(text, participants) {
   return out;
 }
 
+// Répondre directement à quelqu'un ne nécessite ni de le pinguer ni de le nommer
+// (surtout en tête-à-tête). On retire complètement la mention (<@id>) de l'auteur
+// du message auquel elle répond, puis on nettoie la ponctuation résiduelle pour
+// que la phrase reste propre. Les mentions des AUTRES participants (utiles en
+// groupe pour s'adresser à quelqu'un) sont conservées.
+function stripAuthorPing(text, authorId) {
+  if (!text || !authorId) return text;
+  let out = text.replace(new RegExp(`<@!?${authorId}>`, 'g'), '');
+  out = out
+    .replace(/\s+([,.!?;:])/g, '$1')   // espace avant ponctuation
+    .replace(/([,;:])\s*([,;:])/g, '$1') // ponctuations en double
+    .replace(/[ \t]{2,}/g, ' ')          // espaces multiples
+    .replace(/^[\s,;:]+/, '')            // résidu en début de phrase
+    .trim();
+  return out;
+}
+
 // Garde-fous mémoire (anti-radotage). On normalise en minuscules sans ponctuation
 // pour comparer le fond, pas la forme.
 function normalizeMemoryText(text) {
@@ -1567,6 +1584,11 @@ async function handleAIAssistant(message) {
 
       // Réécrit les @pseudo / <@pseudo> en vraies mentions Discord <@id>.
       assistantResponse = applyParticipantMentions(assistantResponse, conversationParticipants);
+      // En tête-à-tête, inutile de te pinguer/nommer: on retire ta mention. En
+      // groupe, on laisse faire le modèle (il peut mentionner quand c'est utile).
+      if (conversationParticipants.size <= 1) {
+        assistantResponse = stripAuthorPing(assistantResponse, message.author.id);
+      }
 
       await logAIRequest({
         userId: message.author.id,
@@ -2158,6 +2180,7 @@ DIRECTIVES FONDAMENTALES
    • Pas de bavardage ou explications inutiles
    • N'AJOUTE JAMAIS de questions à la fin de ta réponse
    • N'INTERPELLE JAMAIS l'utilisateur avec "tu", "vous" etc
+   • MENTIONS AVEC PARCIMONIE: par défaut, ne nomme ni ne mentionne (ping <@id>) la personne à qui tu réponds. En tête-à-tête, ou quand un message t'est clairement adressé, réponds directement sans citer son nom ni la taguer. En groupe, mentionne quelqu'un (y compris l'auteur) UNIQUEMENT quand c'est vraiment nécessaire pour lever une ambiguïté sur qui tu vises — dans ce cas fais-le franchement.
 
 2. PERSONNALITÉ NATURELLE
    • Sois authentique et humaine dans ton ton
