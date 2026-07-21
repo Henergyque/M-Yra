@@ -1425,6 +1425,10 @@ async function handleAIAssistant(message) {
       }
     }
 
+    if (memoryContext) {
+      memoryContext += '\n\n[CONTEXTE DE FOND — ne pas ressortir: les infos mémoire ci-dessus servent uniquement à te situer. Ne les répète pas, n\'en parle pas spontanément, ne fais aucun rappel ni clin d\'œil à un sujet passé (mise à jour, chiffre, version, ancienne vanne...). Utilise-les seulement si c\'est directement nécessaire pour répondre au message actuel.]';
+    }
+
     // === Execute Actions First (if creator) ===
     if (isCreator) {
       // Quick direct patterns for common cases
@@ -2086,6 +2090,8 @@ DIRECTIVES FONDAMENTALES
    • Réponds juste ce qu'on te demande, rien de plus
    • Pas de suggestions non demandées
    • Sois effacée, laisse parler les autres
+   • NE RADOTE JAMAIS: ne reviens pas de toi-même sur un sujet déjà évoqué (une mise à jour, un chiffre, une version, une info ou une vanne déjà dite). Chaque réponse traite UNIQUEMENT le message actuel, sans rappel ni clin d'œil récurrent à un événement passé.
+   • Ne propose pas de faire une recherche web spontanément - cherche seulement si la question l'exige vraiment.
 
 4. HONNÊTETÉ ET TRANSPARENCE
    • Si tu ne sais pas → dis-le simplement
