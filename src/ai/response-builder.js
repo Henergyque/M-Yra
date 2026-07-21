@@ -182,19 +182,21 @@ export class AIResponseBuilder {
 
     return breaker.execute(
       async () => {
+        // 1) Recherche web (si activée): UN SEUL essai, sans retry — c'est le
+        //    chemin coûteux (contenu web facturé en entrée), le retenter en
+        //    boucle multiplierait le coût. En cas d'échec, on retombe proprement
+        //    sur une réponse sans outil.
+        if (useSearch) {
+          try {
+            return await this.runClaudeWithSearch(baseParams, onWebSearch, timeout, model);
+          } catch (searchError) {
+            logger.warn(`Recherche web indisponible, réponse sans recherche: ${searchError.message}`);
+          }
+        }
+
+        // 2) Appel simple sans outil (retry léger, peu coûteux).
         return retryWithBackoff(
           async () => {
-            // 1) Tentative avec recherche web (si activée). En cas d'indispo, on
-            //    retombe proprement sur une réponse sans outil plutôt que d'échouer.
-            if (useSearch) {
-              try {
-                return await this.runClaudeWithSearch(baseParams, onWebSearch, timeout, model);
-              } catch (searchError) {
-                logger.warn(`Recherche web indisponible, réponse sans recherche: ${searchError.message}`);
-              }
-            }
-
-            // 2) Appel simple sans outil.
             const response = await withTimeout(
               claude.messages.create(baseParams),
               timeout,
@@ -226,7 +228,7 @@ export class AIResponseBuilder {
   async runClaudeWithSearch(baseParams, onWebSearch, timeout, model) {
     const params = {
       ...baseParams,
-      tools: [{ type: 'web_search_20260209', name: 'web_search', max_uses: 3 }]
+      tools: [{ type: 'web_search_20260209', name: 'web_search', max_uses: 1 }]
     };
 
     let searchNotified = false;
