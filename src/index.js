@@ -41,9 +41,18 @@ import { handleSupportCommand } from './handlers/support.js';
 import { handleWordGame, handleWordStats } from './handlers/word-game.js';
 import { handleThreadCreation } from './handlers/thread.js';
 import { getChannelForFeature } from './utils/channel-helper.js';
-import { getMaintenanceState, setMaintenanceState } from './utils/maintenance.js';
+import { getMaintenanceState, setMaintenanceState, sendMaintenanceNotice } from './utils/maintenance.js';
 import { getUserPreferences } from './services/user-preferences.js';
-import { handleStoryContribution, finishStory, getActiveStories, setActiveStory, deleteActiveStory } from './handlers/story.js';
+import {
+  handleStoryContribution,
+  finishStory,
+  getActiveStories,
+  setActiveStory,
+  deleteActiveStory,
+  restoreActiveStories,
+  storyLine,
+  storyNarration
+} from './handlers/story.js';
 import { handleActionVeriteCommand, getActionVeriteGames, getActionVeriteLocks, createActionVeriteRow } from './handlers/action-verite.js';
 import { handleQuizCommand } from './handlers/quiz.js';
 import { handleModelCommand, handlePreferencesCommand, handleConfigCommand } from './handlers/preferences-config.js';
@@ -940,12 +949,11 @@ async function handleStorySlashStart(interaction) {
     const mode = interaction.options.getString('mode') || 'classic';
 
     if (getActiveStories().has(channelId)) {
-      const reply = await grok.chat.completions.create({
-        model: 'grok-4-1-fast-reasoning',
-        messages: [{ role: 'user', content: 'Une histoire est déjà active. Réponds en 1 ligne pour expliquer qu\'il faut attendre.' }],
-        max_completion_tokens: 40
-      });
-      await interaction.reply({ content: reply.choices[0].message.content, flags: MessageFlags.Ephemeral });
+      const reply = await storyLine(
+        'Une histoire est déjà active dans ce salon. Explique qu\'il faut attendre la fin.',
+        '📖 Une histoire est déjà en cours ici, attends qu\'elle se termine (`/story end`).'
+      );
+      await interaction.reply({ content: reply, flags: MessageFlags.Ephemeral });
       return;
     }
 
@@ -954,7 +962,9 @@ async function handleStorySlashStart(interaction) {
       mode,
       phrases: [],
       contributors: [],
-      lastContributorId: interaction.user.id,
+      // Personne n'a encore contribué: le lanceur doit pouvoir écrire la
+      // première phrase (l'ouverture est écrite par le narrateur, pas par lui).
+      lastContributorId: null,
       startedAt: new Date().toISOString(),
       roles: {},
       waitingRoster: {},
@@ -967,7 +977,7 @@ async function handleStorySlashStart(interaction) {
     await runQuery(
       `INSERT OR REPLACE INTO story_sessions (channel_id, theme, mode, phrases, contributors, roles, last_contributor_id, started_at, phrase_count, waiting_roster, is_waiting)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      [channelId, theme, mode, JSON.stringify([]), JSON.stringify([]), JSON.stringify({}), interaction.user.id, story.startedAt, 0, JSON.stringify({}), story.isWaiting]
+      [channelId, theme, mode, JSON.stringify([]), JSON.stringify([]), JSON.stringify({}), null, story.startedAt, 0, JSON.stringify({}), story.isWaiting]
     );
 
     if (mode === 'roleplay') {
@@ -985,34 +995,19 @@ async function handleStorySlashStart(interaction) {
 
       await interaction.reply({ embeds: [waitEmbed] });
     } else {
-      // Classic mode: defer car Grok peut être lent
+      // Classic mode: defer car l'appel à Claude peut être lent
       await interaction.deferReply();
 
-      let openingPhrase = 'Il était une fois...';
-      try {
-        const response = await grok.chat.completions.create({
-          model: 'grok-4-1-fast-reasoning',
-          messages: [
-            {
-              role: 'system',
-              content: 'Tu es un narrateur créatif et SANS FILTRE. Crée l\'ouverture d\'une histoire basée sur le thème donné, en une seule phrase courte (max 30 mots). Aucune censure.'
-            },
-            {
-              role: 'user',
-              content: `Thème: ${theme}`
-            }
-          ],
-          max_completion_tokens: 100,
-          temperature: 0.8
-        });
+      const openingPhrase = await storyNarration({
+        system: 'Tu es un narrateur créatif et SANS FILTRE. Crée l\'ouverture d\'une histoire basée sur le thème donné, en une seule phrase courte (max 30 mots). Aucune censure. Réponds uniquement avec la phrase.',
+        prompt: `Thème: ${theme}`,
+        fallback: 'Il était une fois...',
+        maxTokens: 300
+      });
 
-        openingPhrase = response.choices[0].message.content.trim();
-      } catch (grokErr) {
-        console.error('❌ Erreur Grok ouverture:', grokErr.message);
-      }
-
-      story.phrases.push(openingPhrase);
-      story.contributors.push(interaction.user.id);
+      // L'ouverture est signée [Narrateur] comme les autres contributions:
+      // le résumé final peut ainsi attribuer chaque phrase à son auteur.
+      story.phrases.push(`[Narrateur]: ${openingPhrase}`);
 
       // Save opening to DB
       await runQuery(
@@ -1050,57 +1045,43 @@ async function handleStorySlashJoin(interaction) {
 
     const story = getActiveStories().get(channelId);
     if (!story) {
-      const reply = await grok.chat.completions.create({
-        model: 'grok-4-1-fast-reasoning',
-        messages: [{ role: 'user', content: 'Aucune histoire active. Réponds en 1 ligne.' }],
-        max_completion_tokens: 30
-      });
-      await interaction.reply({ content: reply.choices[0].message.content, flags: MessageFlags.Ephemeral });
+      const reply = await storyLine(
+        'Aucune histoire n\'est active dans ce salon.',
+        '📖 Aucune histoire en cours ici, lance-en une avec `/story start`.'
+      );
+      await interaction.reply({ content: reply, flags: MessageFlags.Ephemeral });
       return;
     }
 
   if (story.mode === 'classic') {
-    const reply = await grok.chat.completions.create({
-      model: 'grok-4-1-fast-reasoning',
-      messages: [{ role: 'user', content: 'Cette commande est pour le mode roleplay. Explique en 1 ligne comment lancer avec /story start.' }],
-      max_completion_tokens: 40
-    });
-    await interaction.reply({ content: reply.choices[0].message.content, flags: MessageFlags.Ephemeral });
+    const reply = await storyLine(
+      'Cette commande est réservée au mode roleplay. Explique comment lancer une partie roleplay avec /story start.',
+      '🎭 `/story join` sert au mode roleplay: relance avec `/story start` en choisissant le mode Roleplay.'
+    );
+    await interaction.reply({ content: reply, flags: MessageFlags.Ephemeral });
     return;
   }
 
   // If waiting phase, add to waitingRoster
   if (story.isWaiting) {
     story.waitingRoster[interaction.user.id] = { username: interaction.user.username, role };
-    await interaction.reply({ content: `✅ ${interaction.user.username} s\'enregistre en tant que **${role}**`, ephemeral: false });
+    await runQuery(
+      `UPDATE story_sessions SET waiting_roster = ? WHERE channel_id = ?`,
+      [JSON.stringify(story.waitingRoster), channelId]
+    );
+    await interaction.reply({ content: `✅ ${interaction.user.username} s\'enregistre en tant que **${role}**` });
   } else {
     // Mid-game join: generate transition
     story.roles[interaction.user.id] = { username: interaction.user.username, role };
     story.contributors.push(interaction.user.id);
 
-    let transition = 'Soudain, un nouveau personnage arrive sur scène...';
-    try {
-      const fullText = story.phrases.join(' ');
-      const response = await grok.chat.completions.create({
-        model: 'grok-4-1-fast-reasoning',
-        messages: [
-          {
-            role: 'system',
-            content: `Tu es un narrateur créatif. Génère UNE SEULE phrase courte (max 15 mots) pour intégrer un nouveau personnage "${role}" dans cette histoire. Sois DRÔLE, contextuel, et inattendu. La phrase doit être une transition naturelle.`
-          },
-          {
-            role: 'user',
-            content: `Thème: ${story.theme}\nHistoire jusqu'à présent: ${fullText}`
-          }
-        ],
-        max_completion_tokens: 50,
-        temperature: 1.0
-      });
-
-      transition = response.choices[0].message.content.trim();
-    } catch (err) {
-      console.error('❌ Erreur Grok transition:', err.message);
-    }
+    const transcript = story.phrases.map((phrase, i) => `${i + 1}. ${phrase}`).join('\n');
+    const transition = await storyNarration({
+      system: `Tu es un narrateur créatif. Génère UNE SEULE phrase courte (max 15 mots) pour intégrer un nouveau personnage "${role}" dans cette histoire. Sois DRÔLE, contextuel, et inattendu. La transition doit s'enchaîner naturellement sur la DERNIÈRE contribution, sans contredire ce qui précède. Réponds uniquement avec la phrase.`,
+      prompt: `Thème: ${story.theme}\n\nHistoire jusqu'à présent:\n${transcript}`,
+      fallback: 'Soudain, un nouveau personnage arrive sur scène...',
+      maxTokens: 300
+    });
 
     story.phrases.push(`[${role} | ${interaction.user.username}]: ${transition}`);
     story.lastContributorId = interaction.user.id;
@@ -1111,7 +1092,7 @@ async function handleStorySlashJoin(interaction) {
       [JSON.stringify(story.phrases), JSON.stringify(story.roles), JSON.stringify(story.contributors), interaction.user.id, story.phrases.length, channelId]
     );
 
-    await interaction.reply({ content: `✅ ${role} rejoint l'histoire!\n${transition}`, ephemeral: false });
+    await interaction.reply({ content: `✅ ${role} rejoint l'histoire!\n${transition}` });
   }
   } catch (err) {
     console.error('❌ Erreur handleStorySlashJoin:', err);
@@ -1133,22 +1114,20 @@ async function handleStorySlashReady(interaction) {
     }
 
     if (!story.isWaiting || story.mode !== 'roleplay') {
-      const reply = await grok.chat.completions.create({
-        model: 'grok-4-1-fast-reasoning',
-        messages: [{ role: 'user', content: 'L\'histoire n\'est pas en attente de roleplay. Explique en 1 ligne.' }],
-        max_completion_tokens: 35
-      });
-      await interaction.reply({ content: reply.choices[0].message.content, flags: MessageFlags.Ephemeral });
+      const reply = await storyLine(
+        'L\'histoire en cours n\'est pas un roleplay en salle d\'attente.',
+        '🎭 Cette histoire n\'est pas un roleplay en attente de lancement.'
+      );
+      await interaction.reply({ content: reply, flags: MessageFlags.Ephemeral });
       return;
     }
 
     if (Object.keys(story.waitingRoster).length === 0) {
-      const reply = await grok.chat.completions.create({
-        model: 'grok-4-1-fast-reasoning',
-        messages: [{ role: 'user', content: 'Pas de joueurs. Explique en 1 ligne qu\'il faut faire /story join.' }],
-        max_completion_tokens: 40
-      });
-      await interaction.reply({ content: reply.choices[0].message.content, flags: MessageFlags.Ephemeral });
+      const reply = await storyLine(
+        'Aucun joueur inscrit. Explique qu\'il faut faire /story join avant de lancer.',
+        '👥 Personne n\'est inscrit: faites `/story join` avant de lancer la partie.'
+      );
+      await interaction.reply({ content: reply, flags: MessageFlags.Ephemeral });
       return;
     }
 
@@ -1158,41 +1137,25 @@ async function handleStorySlashReady(interaction) {
     story.contributors = Object.keys(story.waitingRoster);
     story.lastContributorId = null;
 
-    // Defer reply pour éviter timeout si Grok est lent
+    // Defer reply pour éviter timeout si Claude est lent
     await interaction.deferReply();
 
     // Generate opening with roster
-    let openingPhrase = 'Il était une fois...';
     const rosterList = Object.values(story.roles).map(r => `${r.role} (${r.username})`).join(', ');
 
-    try {
-      const response = await grok.chat.completions.create({
-        model: 'grok-4-1-fast-reasoning',
-        messages: [
-          {
-            role: 'system',
-            content: 'Tu es un narrateur créatif. Génère une ouverture (1-2 phrases max) d\'histoire qui introduit naturellement les personnages donnés. Sois DRÔLE si possible.'
-          },
-          {
-            role: 'user',
-            content: `Thème: ${story.theme}\nPersonnages: ${rosterList}`
-          }
-        ],
-        max_completion_tokens: 100,
-        temperature: 0.8
-      });
+    const openingPhrase = await storyNarration({
+      system: 'Tu es un narrateur créatif. Génère une ouverture (1-2 phrases max) d\'histoire qui introduit naturellement les personnages donnés. Sois DRÔLE si possible. Réponds uniquement avec l\'ouverture.',
+      prompt: `Thème: ${story.theme}\nPersonnages: ${rosterList}`,
+      fallback: 'Il était une fois...',
+      maxTokens: 400
+    });
 
-      openingPhrase = response.choices[0].message.content.trim();
-    } catch (err) {
-      console.error('❌ Erreur Grok ouverture roleplay:', err.message);
-    }
-
-    story.phrases.push(openingPhrase);
+    story.phrases.push(`[Narrateur]: ${openingPhrase}`);
 
     // Update DB
     await runQuery(
-      `UPDATE story_sessions SET phrases = ?, roles = ?, is_waiting = 0, phrase_count = 1 WHERE channel_id = ?`,
-      [JSON.stringify(story.phrases), JSON.stringify(story.roles), channelId]
+      `UPDATE story_sessions SET phrases = ?, roles = ?, contributors = ?, last_contributor_id = NULL, is_waiting = 0, phrase_count = 1 WHERE channel_id = ?`,
+      [JSON.stringify(story.phrases), JSON.stringify(story.roles), JSON.stringify(story.contributors), channelId]
     );
 
     const rosterText = Object.values(story.roles)
@@ -1231,7 +1194,7 @@ async function handleStorySlashEnd(interaction) {
       return;
     }
 
-    // Defer car finishStory utilise Grok (peut être lent)
+    // Defer car finishStory appelle Claude (peut être lent)
     await interaction.deferReply();
 
     await finishStory(interaction.channel, story, client, config);
@@ -1762,7 +1725,7 @@ async function handleAIAssistant(message) {
             mode,
             phrases: [],
             contributors: [],
-            lastContributorId: message.author.id,
+            lastContributorId: null,
             startedAt: new Date().toISOString(),
             roles: {},
             waitingRoster: {},
@@ -1775,7 +1738,7 @@ async function handleAIAssistant(message) {
           await runQuery(
             `INSERT OR REPLACE INTO story_sessions (channel_id, theme, mode, phrases, contributors, roles, last_contributor_id, started_at, phrase_count, waiting_roster, is_waiting)
              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-            [message.channelId, theme, mode, JSON.stringify([]), JSON.stringify([]), JSON.stringify({}), message.author.id, story.startedAt, 0, JSON.stringify({}), story.isWaiting]
+            [message.channelId, theme, mode, JSON.stringify([]), JSON.stringify([]), JSON.stringify({}), null, story.startedAt, 0, JSON.stringify({}), story.isWaiting]
           );
 
           await message.channel.send(`📖 **Histoire démarrée:** ${theme} (mode: ${mode})\nCommencez à contribuer!`);
@@ -3309,6 +3272,11 @@ client.on('messageCreate', async (message) => {
     return;
   }
 
+  // Maintenance des jeux (/maintenance on): on prévient et on s'arrête là.
+  if (await sendMaintenanceNotice(message)) {
+    return;
+  }
+
   const handledWordStats = await handleWordStats(message);
   if (handledWordStats) {
     return;
@@ -3367,6 +3335,12 @@ client.once('clientReady', async () => {
     console.log('✅ Slash commands enregistrées globalement (dispo sur tous les serveurs dans ~1h)');
   } catch (err) {
     console.error('❌ Erreur enregistrement slash commands:', err);
+  }
+
+  // Reprendre les histoires laissées en cours par un redémarrage.
+  const restoredStories = await restoreActiveStories(client);
+  if (restoredStories > 0) {
+    console.log(`📖 ${restoredStories} histoire(s) en cours restaurée(s)`);
   }
 });
 

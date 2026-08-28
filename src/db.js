@@ -97,7 +97,8 @@ async function initializeDatabase() {
       started_at TEXT,
       phrase_count INTEGER DEFAULT 0,
       waiting_roster TEXT,
-      is_waiting INTEGER DEFAULT 0
+      is_waiting INTEGER DEFAULT 0,
+      finished_at TEXT
     )
   `);
 
@@ -415,13 +416,23 @@ async function initializeDatabase() {
       { name: 'mode', sql: `ALTER TABLE story_sessions ADD COLUMN mode TEXT DEFAULT 'classic'` },
       { name: 'roles', sql: `ALTER TABLE story_sessions ADD COLUMN roles TEXT DEFAULT '{}'` },
       { name: 'waiting_roster', sql: `ALTER TABLE story_sessions ADD COLUMN waiting_roster TEXT DEFAULT '{}'` },
-      { name: 'is_waiting', sql: `ALTER TABLE story_sessions ADD COLUMN is_waiting INTEGER DEFAULT 0` }
+      { name: 'is_waiting', sql: `ALTER TABLE story_sessions ADD COLUMN is_waiting INTEGER DEFAULT 0` },
+      {
+        name: 'finished_at',
+        sql: `ALTER TABLE story_sessions ADD COLUMN finished_at TEXT`,
+        // Les sessions déjà en base datent d'avant la restauration au démarrage:
+        // on les marque terminées pour ne pas les réactiver par surprise.
+        after: `UPDATE story_sessions SET finished_at = datetime('now') WHERE finished_at IS NULL`
+      }
     ];
 
     for (const col of neededColumns) {
       if (!columnNames.includes(col.name)) {
         console.log(`  ➕ Ajout colonne: ${col.name}`);
         await runQuery(col.sql);
+        if (col.after) {
+          await runQuery(col.after);
+        }
       }
     }
     console.log('✅ Migration DB complétée');
